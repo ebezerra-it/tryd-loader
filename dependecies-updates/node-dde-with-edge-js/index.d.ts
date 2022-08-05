@@ -21,6 +21,3 @@ interface Clients {
 export function createClient(service: any, topic: any): Clients;
 export function createClients(services: any): Clients;
 export function createServer(service: any): any;
-
-//export function createClients(services: any): Clients;
-//export function createClient(services: any): Clients;

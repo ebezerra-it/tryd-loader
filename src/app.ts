@@ -74,9 +74,9 @@ const terminate = async (): Promise<void> => {
       fs.appendFileSync(filename, `${JSON.stringify(logObject)}\n`);
       return;
     } catch (err) {
-      const errMsg = `[TrydLoaderAPP] SERVICE STOPED! LOGEVENT ERROR - Could not write to log file ${filename} due to error: ${
-        err.message
-      }\n[LogMessage]:\n ${JSON.stringify(logObject, null, 4)}\n`;
+      const errMsg = `[TrydLoaderAPP] SERVICE STOPED! LOGEVENT ERROR - Could not write to log file ${filename} due to error: ${JSON.stringify(
+        err,
+      )}\n[LogMessage]:\n ${JSON.stringify(logObject, null, 4)}\n`;
       // eslint-disable-next-line no-console
       console.error(errMsg);
       process.stdin.emit('SIGTERM', errMsg);
@@ -99,7 +99,9 @@ const terminate = async (): Promise<void> => {
         );
       }
     } catch (err) {
-      log2File(`[TrydLoaderAPP] Can't log event due to error: ${err.message}`);
+      log2File(
+        `[TrydLoaderAPP] Can't log event due to error: ${JSON.stringify(err)}`,
+      );
     }
   };
 
@@ -221,8 +223,9 @@ const terminate = async (): Promise<void> => {
       String(process.env.TRYDLOADER_RUN_SERVICE || '')
         .trim()
         .toUpperCase() === 'TRUE'
-    )
+    ) {
       await serviceTryd.start();
+    }
   } catch (err) {
     clearInterval(updateParameters);
 

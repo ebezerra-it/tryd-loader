@@ -6,6 +6,7 @@ import dayjs, { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
+import { Logger } from 'tslog';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -33,7 +34,9 @@ enum TDDEReturnType {
 const WRITE_INTERVAL = 5;
 
 export default class BrokersDDELoader {
-  private asset: string;
+  public asset: string;
+
+  private logger: Logger;
 
   private pool: Pool;
 
@@ -58,8 +61,9 @@ export default class BrokersDDELoader {
   ) => void;
 
   constructor(
-    pool: Pool,
     asset: string,
+    logger: Logger,
+    pool: Pool,
     brokersList: { id: number; name: string }[],
   ) {
     if (brokersList.length === 0) throw new Error(`Empty brokersList`);
@@ -78,6 +82,8 @@ export default class BrokersDDELoader {
     this.asset = asset;
 
     this.pool = pool;
+
+    this.logger = logger;
 
     this.dde = createClients({
       Stech: {
@@ -102,13 +108,13 @@ export default class BrokersDDELoader {
         .set('second', Number(time[2]));
 
       // check if last trade was today
-      if (lastTrade.diff(dayjs(), 'hour', true) > 1) return;
+      if (dayjs().diff(lastTrade, 'minute', true) > 1) return;
 
       this.dde.removeListener('advise', this._ddeEventCheckLastTrade);
       this.dde.stopAdvise();
 
       this.startLoadingData();
-      // console.log(`Asset: ${this.asset} - LOADING DATA!`);
+      logger.info(`[BrokersDDELoader] Asset: ${asset} started loading data.`);
     };
 
     this._ddeEventLoadData = (
@@ -213,6 +219,7 @@ export default class BrokersDDELoader {
         break;
 
       if ((broker.vwap !== 0 && broker.volume !== 0) || broker.active) {
+        if (!broker.active) broker.active = true;
         query = {
           text: `SELECT datetime, volume, vwap FROM "b3-brokersbalance" WHERE asset=$1 AND "broker-id"=$2 ORDER BY datetime DESC LIMIT 1`,
           values: [broker.asset, broker.id],

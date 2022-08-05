@@ -29,6 +29,8 @@ interface IFutureContract {
   expiry: Dayjs;
 }
 
+const ASSETS_FUTURES_NOCONTRACT = 'FRP0, FRP1';
+
 export default class ServiceTryd {
   private logger: Logger;
 
@@ -65,8 +67,9 @@ export default class ServiceTryd {
     assets.forEach(asset => {
       this.assetsBrokersLoader.push(
         new BrokersDDELoader(
-          this.pool,
           asset.code,
+          this.logger,
+          this.pool,
           brokers.filter(b => {
             if (asset.exchange === TExchange.BMF) return b.exchange_bmf;
             return b.exchange_bov;
@@ -86,9 +89,13 @@ export default class ServiceTryd {
 
     try {
       this.startAssetsDDEListening();
-      this.logger.info(`[ServiceTryd] Loading process started`);
+      this.logger.info(
+        `[ServiceTryd] Loading process started for environment: ${process.env.NODE_ENV}`,
+      );
     } catch (err) {
-      throw new Error(`Loading process failed to start: ${err.message}`);
+      throw new Error(
+        `Loading process failed to start: ${JSON.stringify(err)}`,
+      );
     }
   }
 
@@ -106,7 +113,15 @@ export default class ServiceTryd {
 
   private async stopAssetsDDEListening(): Promise<void> {
     for await (const assetBroker of this.assetsBrokersLoader) {
-      await assetBroker.stopListening();
+      try {
+        await assetBroker.stopListening();
+      } catch (err) {
+        this.logger.error(
+          `[ServiceTryd] Failed to stop DDE listening asset: ${
+            assetBroker.asset
+          } - error: ${JSON.stringify(err)}`,
+        );
+      }
     }
   }
 
@@ -131,20 +146,31 @@ export default class ServiceTryd {
 
     // Check if BMF asset exists and treat futures contract $1/FUT=>current contract; $2=>next contract
     for await (const [index, asset] of aBmf.entries()) {
-      const contracts = await this.getFuturesContract(
-        asset.replace(/\$[1|2]/, ''),
-      );
-
-      if (!contracts || (asset.indexOf('$2') && !contracts.next)) {
-        this.logger.warn(`[ServiceTryd] BMF asset not recognized: ${asset}`);
-        aBmf.splice(index, 1);
-      } else {
+      if (
+        ASSETS_FUTURES_NOCONTRACT.split(',').find(
+          a => a.trim().toUpperCase() === asset,
+        )
+      )
         assets.push({
-          code: asset
-            .replace('$1', contracts.current.code)
-            .replace('$2', contracts.next ? contracts.next.code : ''),
+          code: asset,
           exchange: TExchange.BMF,
         });
+      else {
+        const contracts = await this.getFuturesContract(
+          asset.replace(/\$[1|2]/, ''),
+        );
+
+        if (!contracts || (asset.indexOf('$2') && !contracts.next)) {
+          this.logger.warn(`[ServiceTryd] BMF asset not recognized: ${asset}`);
+          aBmf.splice(index, 1);
+        } else {
+          assets.push({
+            code: asset
+              .replace('$1', contracts.current.code)
+              .replace('$2', contracts.next ? contracts.next.code : ''),
+            exchange: TExchange.BMF,
+          });
+        }
       }
     }
 
@@ -164,6 +190,37 @@ export default class ServiceTryd {
           exchange: TExchange.BOV,
         });
       }
+    }
+
+    // Restrict assets quantity to Tryd limitation
+    try {
+      const trydDDEIni = fs.readFileSync(
+        `C:\\Tryd6\\plugins\\stDde\\StDde.ini`,
+        'utf-8',
+      );
+      const maxAssets = trydDDEIni.match(/BROKER_RANKING_MAX_SECURITIES=(\d+)/);
+      if (maxAssets && !Number.isNaN(maxAssets[1])) {
+        if (Number(maxAssets[1]) <= 0)
+          throw new Error(
+            `[ServiceTryd] Wrong StDde.ini parameter BROKER_RANKING_MAX_SECURITIES: ${trydDDEIni}`,
+          );
+        if (assets.length > Number(maxAssets[1])) {
+          assets.splice(Number(maxAssets[1]));
+          this.logger.warn(
+            `[ServiceTryd] Assets limited to parameter BROKER_RANKING_MAX_SECURITIES in StDde.ini file: ${Number(
+              maxAssets[1],
+            )} - Accepted assets: ${assets.map(a => a.code).join(', ')}`,
+          );
+        }
+      } else {
+        this.logger.error(
+          `[ServiceTryd] Missing parameter BROKER_RANKING_MAX_SECURITIES in StDde.ini file: ${trydDDEIni}`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        `[ServiceTryd] Unable to open StDde.ini file: ${JSON.stringify(err)}`,
+      );
     }
 
     return assets;

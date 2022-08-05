@@ -171,7 +171,7 @@ export default class TrydHandler extends EventEmitter {
   }
 
   private async closeChildWindows(): Promise<void> {
-    await new Promise(async (resolve, reject) => {
+    await new Promise<void>(async (resolve, reject) => {
       setTimeout(() => {
         reject(new Error('[TrydHandler] Unable to close Tryd child windows'));
       }, CONNECTION_CHECKER_TIMEOUT * 1000);
@@ -187,7 +187,7 @@ export default class TrydHandler extends EventEmitter {
           await sleep(ACTION_DELAY);
         }
       } catch (err) {
-        resolve(err);
+        reject(err);
       }
 
       resolve();
@@ -195,7 +195,7 @@ export default class TrydHandler extends EventEmitter {
   }
 
   private async closeNotifications(): Promise<void> {
-    await new Promise(async (resolve, reject) => {
+    await new Promise<void>(async (resolve, reject) => {
       setTimeout(() => {
         reject(new Error('[TrydHandler] Unable to close notification alerts'));
       }, CONNECTION_CHECKER_TIMEOUT * 1000);
@@ -219,7 +219,7 @@ export default class TrydHandler extends EventEmitter {
   }
 
   private async waitForOnlineConnection(): Promise<void> {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const waitForOnlineConnection = setInterval(async () => {
         if (this.connectionStatus() === TConnectionStatus.ONLINE) {
           resolve();
