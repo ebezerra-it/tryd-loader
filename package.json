@@ -1,0 +1,46 @@
+{
+  "name": "tryd-data-loader",
+  "version": "1.0.0",
+  "main": "app.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": "14.3.0"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "clean": "rm ./deploy/* -r -force",
+    "build_dep": "@powershell -NoProfile -ExecutionPolicy Unrestricted -Command Copy-Item -Path  \".\\dependecies-updates\"  -Recurse -Destination \".\\node_modules\" -Container -Force",
+    "dev": "ts-node-dev --respawn --poll --exit-child --transpile-only --inspect=0.0.0.0:9229 --ignore-watch node_modules --watch src -- src/app.ts",
+    "build": "npm run clean; npm run build_dep; tsc -p ./",
+    "start": "node ./deploy/app.js"
+  },
+  "dependencies": {
+    "axios": "^0.27.2",
+    "dayjs": "^1.11.4",
+    "dotenv": "^16.0.1",
+    "node-dde-with-edge-js": "^1.0.0",
+    "pg": "^8.7.3",
+    "qs": "^6.11.0",
+    "robotjs": "^0.6.0",
+    "tslog": "^3.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^18.6.2",
+    "@types/pg": "^8.6.5",
+    "@types/qs": "^6.9.7",
+    "@typescript-eslint/eslint-plugin": "^4.28.4",
+    "@typescript-eslint/parser": "^4.28.4",
+    "eslint": "^7.32.0",
+    "eslint-config-airbnb-base": "^14.2.1",
+    "eslint-config-prettier": "^8.5.0",
+    "eslint-import-resolver-typescript": "^2.4.0",
+    "eslint-plugin-import": "^2.23.4",
+    "eslint-plugin-prettier": "^4.2.1",
+    "prettier": "^2.7.1",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^4.7.4"
+  }
+}

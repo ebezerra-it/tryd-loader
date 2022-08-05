@@ -1,0 +1,7 @@
+node_modules/
+build/
+deploy/
+shared/
+*.log
+*.ova
+*.crt
