@@ -1,4 +1,3 @@
-import { Pool } from 'pg';
 import { Logger, ILogObject, TLogLevelName, TLogLevelId } from 'tslog';
 import path from 'path';
 import fs from 'fs';
@@ -11,53 +10,61 @@ import qs from 'qs';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
 import ServiceTryd, { sleep } from './controllers/serviceTryd';
+import QueryFactory from './controllers/queryFactory';
 
-if (process.env.NODE_DEV === 'PROD') dotenv.config({ path: './prod.env' });
+if (String(process.env.NODE_ENV === 'PROD'))
+  dotenv.config({ path: './prod.env' });
 else dotenv.config({ path: './.env' });
+
+// console.log(`NODE_ENV=${process.env.NODE_ENV}`);
+// console.log(`DB_HOST=${process.env.DB_HOST}`);
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.tz.setDefault(process.env.TZ || 'America/Sao_Paulo');
 dayjs.extend(customParseFormat);
 
-const pool = new Pool({
-  host: process.env.DB_HOST || '',
-  port: Number(process.env.DB_PORT || 0),
-  database: process.env.DB_NAME || '',
-  user: process.env.DB_USER || '',
-  password: process.env.DB_PASS || '',
-  ssl: {
-    rejectUnauthorized: false,
-    ca: fs.readFileSync(path.join(__dirname, '../', 'ssl/ca.crt')).toString(),
-  },
-});
+let queryFactory: QueryFactory;
 
 let serviceTryd: ServiceTryd;
 
 const loadParameters = async (): Promise<void> => {
-  const qParams = await pool.query(
+  if (
+    String(process.env.TRYDLOADER_RUN_SERVICE || '')
+      .trim()
+      .toUpperCase() === 'FALSE'
+  )
+    return;
+
+  const qParams = await queryFactory.query(
     `SELECT * FROM "global-parameters" WHERE key LIKE 'TRYDLOADER_%' ORDER BY key ASC`,
   );
 
   if (!qParams || qParams.rowCount === 0)
     throw new Error(`Unable to load TRYDLOADER_ global parameters`); // Check try catch
 
-  qParams.rows.forEach(param => {
+  qParams.rows.forEach((param: any) => {
     process.env[param.key] = param.value;
   });
 };
 
+let updateParameters: NodeJS.Timer;
+
 const terminate = async (): Promise<void> => {
+  if (updateParameters) clearInterval(updateParameters);
+
+  // wait for any running loadParameter() process to finish
+  await sleep(
+    Number(process.env.TRYDLOADER_UPDATE_PARAMETERS_INTERVAL || '30'),
+  );
+
   if (serviceTryd) await serviceTryd.stop();
-  if (pool) await pool.end();
+  if (queryFactory && !queryFactory.closed) await queryFactory.close();
   process.stdin.emit('SIGTERM', `[TrydLoader] Service stoped`);
   if (process.env.NODE_ENV === 'PROD') exec('shutdown /s /t 0');
 };
 
 (async () => {
-  await pool.query(
-    `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'TRUE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='TRUE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
-  );
   const logger = new Logger({
     dateTimeTimezone: process.env.TZ || 'America/Sao_Paulo',
     dateTimePattern: 'day-month-year hour:minute:second.millisecond',
@@ -104,6 +111,11 @@ const terminate = async (): Promise<void> => {
       );
     }
   };
+
+  queryFactory = new QueryFactory(logger);
+  await queryFactory.query(
+    `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'TRUE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='TRUE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
+  );
 
   try {
     await loadParameters();
@@ -184,7 +196,7 @@ const terminate = async (): Promise<void> => {
     'info',
   );
 
-  const updateParameters = setInterval(async () => {
+  updateParameters = setInterval(async () => {
     loadParameters();
 
     if (
@@ -202,21 +214,80 @@ const terminate = async (): Promise<void> => {
         'YYYY-MM-DD HH:mm',
       );
       if (dtSch.isValid() && dtSch.isBefore(dayjs())) {
-        await pool.query(
+        await queryFactory.query(
           `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'FALSE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='FALSE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
         );
         process.env.TRYDLOADER_RUN_SERVICE = 'FALSE';
         logger.warn(
-          `[TrydLoaderAPP] Service time programmed stop: ${process.env.TRYDLOADER_SHUTDOWN_TIME} - ${process.env.TRYDLOADER_RUN_SERVICE}`,
+          `[TrydLoaderAPP] Service time programmed stop: ${process.env.TRYDLOADER_SHUTDOWN_TIME}`,
         );
       }
     }
   }, Number(process.env.TRYDLOADER_UPDATE_PARAMETERS_INTERVAL || '30') * 1000);
 
+  // Check if is trade day
+  let isTradeDay = true;
+  if (dayjs().day() === 0 || dayjs().day() === 6) isTradeDay = false;
+  else {
+    // check for holidays
+    const qHolidays = await queryFactory.query(
+      `SELECT event from "holiday-calendar" WHERE "country-code"=$1 AND date::DATE=$2::DATE`,
+      ['BR', dayjs().startOf('day')],
+    );
+    if (qHolidays.rowCount > 0) {
+      try {
+        const calendarExceptions: { country: string; exceptions: string[] }[] =
+          JSON.parse(process.env.CALENDAR_HOLIDAY_EXCEPTIONS || '');
+
+        /* console.log(
+          `CALENDAR_EXCEPTIONS=${JSON.stringify(calendarExceptions)}`,
+        ); */
+        if (calendarExceptions) {
+          const b3Exceptions = calendarExceptions.find(c => c.country === 'BR');
+          if (
+            b3Exceptions &&
+            !b3Exceptions.exceptions.find(e =>
+              qHolidays.rows.find(
+                (q: any) =>
+                  String(q.event).trim().toUpperCase() ===
+                  e.trim().toUpperCase(),
+              ),
+            )
+          ) {
+            isTradeDay = false;
+          }
+        }
+        // eslint-disable-next-line no-empty
+      } catch (e) {
+        logger.warn(
+          `[TrydLoaderAPP] Holiday exceptions type missmatch error: ${process.env.CALENDAR_HOLIDAY_EXCEPTIONS}`,
+        );
+        isTradeDay = false;
+      }
+    }
+  }
+
+  if (!isTradeDay) {
+    logger.warn(
+      `[TrydLoaderAPP] Service weekend/holiday programmed stop: ${dayjs()
+        .startOf('day')
+        .format('DD/MM/YYYY')}`,
+    );
+    await queryFactory.query(
+      `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'FALSE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='FALSE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
+    );
+    await terminate();
+    return;
+  }
+
+  // wait for update parameters to run to check shutdown time before starting service
   await sleep(
-    Number(process.env.TRYDLOADER_UPDATE_PARAMETERS_INTERVAL || '30') + 10,
+    Number(process.env.TRYDLOADER_UPDATE_PARAMETERS_INTERVAL || '30') +
+      Math.trunc(
+        Number(process.env.TRYDLOADER_UPDATE_PARAMETERS_INTERVAL || '30') / 2,
+      ),
   );
-  serviceTryd = new ServiceTryd(pool, logger, botLogEvent);
+  serviceTryd = new ServiceTryd(queryFactory, logger, botLogEvent);
 
   try {
     if (
@@ -238,7 +309,6 @@ const terminate = async (): Promise<void> => {
     );
 
     await terminate();
-    process.stdin.emit('SIGTERM', `[TrydLoaderAPP] Service stoped`);
     return;
   }
 
@@ -252,8 +322,5 @@ const terminate = async (): Promise<void> => {
     );
   }
 
-  clearInterval(updateParameters);
-
   await terminate();
-  process.stdin.emit('SIGTERM', `[TrydLoader] Service stoped`);
 })();

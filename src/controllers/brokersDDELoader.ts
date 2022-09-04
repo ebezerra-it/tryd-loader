@@ -1,12 +1,12 @@
 /* eslint-disable no-continue */
 /* eslint-disable no-restricted-syntax */
 import { createClients, Clients } from 'node-dde-with-edge-js';
-import { Pool } from 'pg';
 import dayjs, { Dayjs } from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import { Logger } from 'tslog';
+import QueryFactory from './queryFactory';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -38,7 +38,7 @@ export default class BrokersDDELoader {
 
   private logger: Logger;
 
-  private pool: Pool;
+  private queryFactory: QueryFactory;
 
   private dde: Clients;
 
@@ -63,7 +63,7 @@ export default class BrokersDDELoader {
   constructor(
     asset: string,
     logger: Logger,
-    pool: Pool,
+    queryFactory: QueryFactory,
     brokersList: { id: number; name: string }[],
   ) {
     if (brokersList.length === 0) throw new Error(`Empty brokersList`);
@@ -81,7 +81,7 @@ export default class BrokersDDELoader {
 
     this.asset = asset;
 
-    this.pool = pool;
+    this.queryFactory = queryFactory;
 
     this.logger = logger;
 
@@ -199,7 +199,7 @@ export default class BrokersDDELoader {
   public async stopListening(): Promise<void> {
     if (this._writeTimer) clearInterval(this._writeTimer);
 
-    this.dde.stopAdvise();
+    if (this.dde.isConnected()) this.dde.stopAdvise();
     this.dde.removeAllListeners(['advise']);
   }
 
@@ -224,7 +224,8 @@ export default class BrokersDDELoader {
           text: `SELECT datetime, volume, vwap FROM "b3-brokersbalance" WHERE asset=$1 AND "broker-id"=$2 ORDER BY datetime DESC LIMIT 1`,
           values: [broker.asset, broker.id],
         };
-        const qLast = await this.pool.query(query);
+
+        const qLast = await this.queryFactory.query(query);
         if (
           qLast &&
           qLast.rowCount > 0 &&
@@ -244,7 +245,7 @@ export default class BrokersDDELoader {
             broker.vwap,
           ],
         };
-        await this.pool.query(query);
+        await this.queryFactory.query(query);
       }
     }
 

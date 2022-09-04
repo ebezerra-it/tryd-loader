@@ -21,10 +21,10 @@ interface ITrydHandlerConfig {
 
 const TRYD_OPEN_DELAY = 15;
 const CONNECTION_CHECKER_INTERVAL = 1;
-const CONNECTION_CHECKER_TIMEOUT = 10;
+const CONNECTION_CHECKER_TIMEOUT = 60;
 const CONNECTION_BROKEN_RECHECK = 5;
 const ACTION_DELAY = 2;
-const TRYD_BACKGROUND_COLOR = '191919';
+const TRYD_BACKGROUND_COLOR = '191919'; // '3c3c3c'; // '191919'; //
 
 function sleep(s: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, s * 1000));
@@ -92,7 +92,7 @@ export default class TrydHandler extends EventEmitter {
   }
 
   private createListeners(): void {
-    const event = 'ConnectionBroken';
+    const event = 'ConnectionDown';
     const action = async (eventName: string) => {
       const trydEvent = this.eventListeners.find(e => e.event === eventName);
       if (!trydEvent)
@@ -107,8 +107,11 @@ export default class TrydHandler extends EventEmitter {
 
       if (this.connectionStatus() !== TConnectionStatus.ONLINE) {
         await sleep(this.config.CONNECTION_BROKEN_RECHECK);
-        if (this.connectionStatus() !== TConnectionStatus.ONLINE)
+        if (this.connectionStatus() !== TConnectionStatus.ONLINE) {
           this.emit(event);
+          await this.waitForOnlineConnection();
+          this.emit('ConnectionUp');
+        }
       }
       trydEvent.timer = setInterval(
         trydEvent.action,
@@ -147,7 +150,7 @@ export default class TrydHandler extends EventEmitter {
         throw new Error('[TrydHandler] Unable to launch TRYD');
 
       // wait for online connection
-      await this.waitForOnlineConnection();
+      await this.waitForOnlineConnection(CONNECTION_CHECKER_TIMEOUT);
 
       // close child windows
       await this.closeChildWindows();
@@ -172,64 +175,89 @@ export default class TrydHandler extends EventEmitter {
 
   private async closeChildWindows(): Promise<void> {
     await new Promise<void>(async (resolve, reject) => {
-      setTimeout(() => {
+      const timeout = setTimeout(() => {
         reject(new Error('[TrydHandler] Unable to close Tryd child windows'));
       }, CONNECTION_CHECKER_TIMEOUT * 1000);
 
       try {
         while (
           this.robot.getPixelColor(
-            this.guestScreen.width / 2,
-            this.guestScreen.height / 2,
+            Math.trunc(this.guestScreen.width / 2),
+            Math.trunc(this.guestScreen.height / 2),
           ) !== TRYD_BACKGROUND_COLOR
         ) {
+          this.robot.moveMouse(Math.trunc(this.guestScreen.width / 2), 10);
+          this.robot.mouseClick();
           this.robot.keyTap('escape');
           await sleep(ACTION_DELAY);
         }
       } catch (err) {
         reject(err);
       }
-
+      clearTimeout(timeout);
       resolve();
     });
   }
 
   private async closeNotifications(): Promise<void> {
     await new Promise<void>(async (resolve, reject) => {
-      setTimeout(() => {
+      let timeout: NodeJS.Timer;
+
+      const waitForCloseNotifications = setInterval(async () => {
+        if (
+          this.robot.getPixelColor(
+            this.guestScreen.width - 124,
+            this.guestScreen.height - 170,
+          ) !== TRYD_BACKGROUND_COLOR
+        ) {
+          if (
+            this.robot.getPixelColor(
+              this.guestScreen.width - 124,
+              this.guestScreen.height - 200,
+            ) !== TRYD_BACKGROUND_COLOR
+          ) {
+            this.robot.moveMouse(
+              this.guestScreen.width - 15,
+              this.guestScreen.height - 200,
+            );
+          } else {
+            this.robot.moveMouse(
+              this.guestScreen.width - 15,
+              this.guestScreen.height - 170,
+            );
+          }
+          this.robot.mouseClick();
+        } else {
+          clearInterval(waitForCloseNotifications);
+          if (timeout) clearTimeout(timeout);
+          resolve();
+        }
+      }, CONNECTION_CHECKER_INTERVAL * 1000 + ACTION_DELAY * 1000);
+
+      timeout = setTimeout(() => {
+        clearInterval(waitForCloseNotifications);
         reject(new Error('[TrydHandler] Unable to close notification alerts'));
       }, CONNECTION_CHECKER_TIMEOUT * 1000);
-
-      while (
-        this.robot.getPixelColor(
-          this.guestScreen.width - 15,
-          this.guestScreen.height - 68,
-        ) !== TRYD_BACKGROUND_COLOR
-      ) {
-        this.robot.moveMouse(
-          this.guestScreen.width - 15,
-          this.guestScreen.height - 168,
-        );
-        this.robot.mouseClick();
-        await sleep(ACTION_DELAY);
-      }
-
-      resolve();
     });
   }
 
-  private async waitForOnlineConnection(): Promise<void> {
+  private async waitForOnlineConnection(timeoutSecs?: number): Promise<void> {
     await new Promise<void>((resolve, reject) => {
+      let timeout: NodeJS.Timer;
       const waitForOnlineConnection = setInterval(async () => {
         if (this.connectionStatus() === TConnectionStatus.ONLINE) {
+          clearInterval(waitForOnlineConnection);
+          if (timeout) clearTimeout(timeout);
           resolve();
         }
       }, CONNECTION_CHECKER_INTERVAL * 1000);
 
-      setTimeout(() => {
-        clearInterval(waitForOnlineConnection);
-        reject(new Error('[TrydHandler] Open Tryd connection error'));
-      }, CONNECTION_CHECKER_TIMEOUT * 1000);
+      if (timeoutSecs && timeoutSecs > 0) {
+        timeout = setTimeout(() => {
+          clearInterval(waitForOnlineConnection);
+          reject(new Error('[TrydHandler] Open Tryd connection error'));
+        }, timeoutSecs * 1000);
+      }
     });
   }
 
@@ -257,7 +285,7 @@ export default class TrydHandler extends EventEmitter {
     // start DDE 117, 49 on: 304c63 off: 3c3c3c
     const colorStarted = this.robot.getPixelColor(117, 49);
     if (colorStarted === '304c63') return true;
-    if (colorStarted === '364450') return false;
+    if (colorStarted === '364450' || colorStarted === '3c3c3c') return false;
     throw new Error(`[TrydHandler] Unknown startDDE color: ${colorStarted}`);
   }
 

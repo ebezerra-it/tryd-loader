@@ -13,9 +13,8 @@
   "scripts": {
     "clean": "@powershell -NoProfile -ExecutionPolicy Unrestricted -Command rm ./deploy/* -r -force",
     "build_dep": "@powershell -NoProfile -ExecutionPolicy Unrestricted -Command Copy-Item -Path  \".\\dependecies-updates\\*\"  -Recurse -Destination \".\\node_modules\" -Container -Force",
-    "dev": "@powershell -NoProfile -ExecutionPolicy Unrestricted -Command $env:NODE_ENV='DEV'; ts-node-dev --respawn --poll --exit-child --transpile-only --inspect=0.0.0.0:9229 --ignore-watch node_modules --watch src -- src/app.ts",
     "build": "npm run clean -- && npm run build_dep -- && npx tsc -p ./",
-    "start": "NODE_ENV=PROD node ./deploy/app.js"
+    "dev": "@powershell -NoProfile -ExecutionPolicy Unrestricted -Command $env:NODE_ENV='DEV'; ts-node-dev --respawn --poll --exit-child --transpile-only --inspect=0.0.0.0:9229 --ignore-watch node_modules --watch src -- src/app.ts"
   },
   "dependencies": {
     "axios": "^0.27.2",

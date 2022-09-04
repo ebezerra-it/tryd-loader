@@ -2,10 +2,10 @@
 /* eslint-disable no-restricted-syntax */
 import fs from 'fs';
 import { Logger } from 'tslog';
-import { Pool } from 'pg';
 import dayjs, { Dayjs } from 'dayjs';
 import TrydHandler, { sleep } from './trydHandler';
 import BrokersDDELoader from './brokersDDELoader';
+import QueryFactory from './queryFactory';
 
 interface IBroker {
   id: number;
@@ -40,10 +40,10 @@ export default class ServiceTryd {
 
   private assetsBrokersLoader: BrokersDDELoader[];
 
-  private pool: Pool;
+  private queryFactory: QueryFactory;
 
   constructor(
-    pool: Pool,
+    queryFactory: QueryFactory,
     logger: Logger,
     botLogger: (event: string) => Promise<void>,
   ) {
@@ -51,7 +51,7 @@ export default class ServiceTryd {
     this.assetsBrokersLoader = [];
     this.logger = logger;
     this.botLogger = botLogger;
-    this.pool = pool;
+    this.queryFactory = queryFactory;
   }
 
   public async start(): Promise<void> {
@@ -69,7 +69,7 @@ export default class ServiceTryd {
         new BrokersDDELoader(
           asset.code,
           this.logger,
-          this.pool,
+          this.queryFactory,
           brokers.filter(b => {
             if (asset.exchange === TExchange.BMF) return b.exchange_bmf;
             return b.exchange_bov;
@@ -78,8 +78,13 @@ export default class ServiceTryd {
       );
     });
 
-    this.tryd.on('ConnectionBroken', () => {
-      this.logger.warn(`[ServiceTryd] ALERT: Tryd connection is down!`);
+    this.tryd.on('ConnectionDown', () => {
+      this.logger.warn(
+        `[ServiceTryd] ALERT: Tryd connection is down! Waiting for online connection...`,
+      );
+    });
+    this.tryd.on('ConnectionUp', () => {
+      this.logger.warn(`[ServiceTryd] ALERT: Tryd connection is up again!`);
     });
 
     await sleep(Number(process.env.TRYDLOADER_SERVICE_START_DELAY || '30')); // wait for OS ready
@@ -107,6 +112,7 @@ export default class ServiceTryd {
 
   public async stop(): Promise<void> {
     await this.stopAssetsDDEListening();
+    this.tryd.removeAllListeners();
     await this.tryd.close();
     this.logger.info(`[ServiceTryd] Process stoped`);
   }
@@ -176,7 +182,7 @@ export default class ServiceTryd {
 
     // Check if BOV asset exists
     for await (const [index, asset] of aBov.entries()) {
-      const qAsset = await this.pool.query(
+      const qAsset = await this.queryFactory.query(
         `SELECT asset FROM "b3-assets-expiry" WHERE asset=$1 AND type=$2 LIMIT 1`,
         [asset, 'SPOT'],
       );
@@ -231,7 +237,7 @@ export default class ServiceTryd {
   ): Promise<
     { current: IFutureContract; next: IFutureContract | undefined } | undefined
   > {
-    const qAssets = await this.pool.query(
+    const qAssets = await this.queryFactory.query(
       'SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry">=NOW() ORDER BY "date-expiry" ASC LIMIT 2',
       [`^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`, 'FUTURES'],
     );
@@ -306,7 +312,7 @@ export default class ServiceTryd {
         });
     });
 
-    const qBrokers = await this.pool.query(
+    const qBrokers = await this.queryFactory.query(
       'SELECT id, name, "exchange-bov" bov, "exchange-bmf" bmf FROM "b3-brokers" ORDER BY id ASC',
     );
 
@@ -314,9 +320,9 @@ export default class ServiceTryd {
     const updatedBrokersBmf: IBroker[] = [];
     const updatedBrokersBov: IBroker[] = [];
     for await (const broker of brokers) {
-      const bDB = qBrokers.rows.find(b => b.id === broker.id);
+      const bDB = qBrokers.rows.find((b: any) => b.id === broker.id);
       if (!bDB) {
-        await this.pool.query(
+        await this.queryFactory.query(
           'INSERT INTO "b3-brokers" (id, name, "exchange-bov", "exchange-bmf") VALUES ($1, $2, $3, $4)',
           [broker.id, broker.name, broker.exchange_bov, broker.exchange_bmf],
         );
@@ -327,7 +333,7 @@ export default class ServiceTryd {
         broker.exchange_bmf !== bDB.bmf
       ) {
         if (broker.name.toUpperCase() === String(bDB.name).toUpperCase()) {
-          await this.pool.query(
+          await this.queryFactory.query(
             'UPDATE "b3-brokers" SET "exchange-bov"=$2, "exchange-bmf"=$3 WHERE id=$1',
             [broker.id, broker.exchange_bov, broker.exchange_bmf],
           );
