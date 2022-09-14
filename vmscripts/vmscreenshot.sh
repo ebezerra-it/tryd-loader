@@ -13,20 +13,16 @@ do
    export "$KEY"="$VALUE"
 done
 
-# VM parameters
-#VM_NAME="w10tryd"
-#VM_SCREENSHOTS_FOLDER=${VM_SCREENSHOTS_FOLDER%/}
-
 # Validate arguments
-if ! test -z "$VM_NAME" ; then
+if test -z "$VM_NAME" ; then
     echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Missing argument VM_NAME\" }"
     exit 1
 fi
-
-if ! test -z "$VM_SCREENSHOTS_FOLDER" ; then
-    echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Missing argument VM_SCREENSHOTS_FOLDER\" }"
+if test -z "$VM_SCREENSHOTS_HOST_DIR" ; then
+    echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Missing argument VM_SCREENSHOTS_HOST_DIR\" }"
     exit 1
 fi
+VM_SCREENSHOTS_HOST_DIR=${VM_SCREENSHOTS_HOST_DIR%/} # removes last /
 
 # Check if VM exists
 if ! virsh list --all | grep -q "$VM_NAME" ; then
@@ -41,20 +37,20 @@ if ! virsh list --state-running | grep -q "$VM_NAME" ; then
 fi
 
 # Check if screenshot folder exists
-if ! [ -d "${VM_SCREENSHOTS_FOLDER%/}" ]; then
-    echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Screenshot folder does not exist: ${VM_SCREENSHOTS_FOLDER%/}\" }"
+if ! [ -d "${VM_SCREENSHOTS_HOST_DIR%/}" ]; then
+    echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Screenshot folder does not exist: ${VM_SCREENSHOTS_HOST_DIR%/}\" }"
     exit 1
 fi
 
 # Check if screenshot folder has write permission
-if ! [ -w "${VM_SCREENSHOTS_FOLDER%/}" ]; then
-    echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Screenshot folder does not has write permission: ${VM_SCREENSHOTS_FOLDER%/}\" }"
+if ! [ -w "${VM_SCREENSHOTS_HOST_DIR%/}" ]; then
+    echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Screenshot folder does not has write permission: ${VM_SCREENSHOTS_HOST_DIR%/}\" }"
     exit 1
 fi
 
-IMG_FILENAME="${VM_SCREENSHOTS_FOLDER%/}/ss_$VM_NAME_$(date "+%Y%m%d%H%M%S").png"
+IMG_FILENAME="ss_$VM_NAME_$(date "+%Y%m%d%H%M%S").ppm"
 
-virsh screenshot "$VM_NAME" --file $IMG_FILENAME >&- 2>&-
+virsh screenshot "$VM_NAME" --file ${VM_SCREENSHOTS_HOST_DIR%/}/$IMG_FILENAME >&- 2>&-
 if [[ $? -gt 0 ]] ; then
     echo "{ status: \"error\", message: \"[VMSCREENSHOT] ERROR - Unable to take screenshot from VM $VM_NAME\" }"
     exit 1

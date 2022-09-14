@@ -12,23 +12,36 @@ do
    export "$KEY"="$VALUE"
 done
 
-#VM parameters
-#VM_NAME="w10tryd"
-
-# Check if VM exists
-if ! virsh list --all | grep -q "$VM_NAME" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing VM $VM_NAME\" }"
+# Validate arguments
+if test -z "$VM_NAME" ; then
+    echo "{ status: \"error\", message: \"[VMSTATUS] ERROR - Missing argument VM_NAME\" }"
     exit 1
 fi
 
-# 's/.*State:\s*\([a-z]*\).*CPU time:\s*\([0-9]\+\.[0-9]\).*/{ state: "\1", upseconds: \2 }/'
-# Check if VM is running
-if virsh list --state-running | grep -q "$VM_NAME" ; then
-    UP_SECONDS=$(virsh dominfo "$VM_NAME" | grep "CPU time:" | sed -e 's/CPU time:\s*\([0-9]\+\.[0-9]\)/\1/')
-    echo "{ status: \"success\", message: \"[VMSTATUS] VM status script was executed successfuly in VM $VM_NAME\", status: { state: \"running\", upseconds: ${UP_SECONDS} } }"
-    exit 0
+# Check if VM exists
+if ! virsh list --all | grep -q "$VM_NAME" ; then
+    echo "{ status: \"error\", message: \"[VMSTATUS] ERROR - Missing VM $VM_NAME\" }"
+    exit 1
 fi
 
-STATUS=$(virsh domstate "$VM_NAME")
-echo "{ status: \"success\", message: \"[VMSTATUS] VM status script was executed successfuly in VM $VM_NAME\", ${STATUS%$'\r'} }"
-exit 0;
+CMD_INFO_RETURN=$(virsh dominfo "$VM_NAME")
+if ! [[ $CMD_INFO_RETURN =~ .*State:[[:blank:]]*(running|idle|paused|in shutdown|shut off|crashed|pmsuspended).* ]] ; then
+    echo "{ status: \"error\", message: \"[VMSTATUS] ERROR - Wrong status command return for VM $VM_NAME\", error: \"$CMD_INFO_RETURN\" }"
+    exit 1
+fi
+
+VM_STATE=${BASH_REMATCH[1]}
+
+if [ $VM_STATE == "running" ] ; then
+    if ! [[ $CMD_INFO_RETURN =~ .*CPU[[:blank:]]time:[[:blank:]]*([0-9]+\.[0-9]+)s.* ]] ; then
+        echo "{ status: \"error\", message: \"[VMSTATUS] ERROR - Wrong running state status command return for VM $VM_NAME\", error: \"$CMD_INFO_RETURN\" }"
+        exit 1
+    fi
+
+    VM_UPSECONDS=${BASH_REMATCH[1]}
+    echo "{ status: \"success\", message: \"[VMSTATUS] VM status script was executed successfuly in VM $VM_NAME\", status: { state: \"$VM_STATE\", upseconds: $VM_UPSECONDS } }"
+    exit 0
+else
+    echo "{ status: \"success\", message: \"[VMSTATUS] VM status script was executed successfuly in VM $VM_NAME\", status: { state: \"$VM_STATE\" } }"
+    exit 0
+fi

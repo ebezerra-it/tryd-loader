@@ -12,18 +12,21 @@ do
    export "$KEY"="$VALUE"
 done
 
-#VM parameters
-#VM_NAME="w10tryd"
+# Validate arguments
+if test -z "$VM_NAME" ; then
+    echo "{ status: \"error\", message: \"[VMSTOP] ERROR - Missing argument VM_NAME\" }"
+    exit 1
+fi
 
 # Check if VM exists
 if ! virsh list --all | grep -q "$VM_NAME" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing VM $VM_NAME\" }"
+    echo "{ status: \"error\", message: \"[VMSTOP] ERROR - Missing VM $VM_NAME\" }"
     exit 1
 fi
 
 # Check if VM is running
 if ! virsh list --state-running | grep -q "$VM_NAME" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - VM $VM_NAME is not running\" }"
+    echo "{ status: \"error\", message: \"[VMSTOP] ERROR - VM $VM_NAME is not running\" }"
     exit 1
 fi
 
@@ -33,7 +36,6 @@ if [[ $? -gt 0 ]] ; then
     echo "{ status: \"error\", message: \"[VMSTOP] ERROR - Unable to stop VM $VM_NAME\" }"
     exit 1
 fi
-sleep 5
 
 echo "{ status: \"success\", message: \"[VMSTOP] VM stop script was executed successfuly in VM $VM_NAME\" }"
 exit 0;

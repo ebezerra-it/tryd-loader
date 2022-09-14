@@ -93,7 +93,7 @@ const terminate = async (): Promise<void> => {
   const botLogEvent = async (event: string): Promise<void> => {
     try {
       const res = await axios.post(
-        `http://${process.env.TELEGRAM_API_HOST || '127.0.0.1'}:${
+        `http://${process.env.HOST_IP || '127.0.0.1'}:${
           process.env.TELEGRAM_API_PORT || '8001'
         }/tracelog`,
         qs.stringify({
