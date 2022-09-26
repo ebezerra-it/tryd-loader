@@ -16,9 +16,6 @@ if (String(process.env.NODE_ENV === 'PROD'))
   dotenv.config({ path: './prod.env' });
 else dotenv.config({ path: './.env' });
 
-// console.log(`NODE_ENV=${process.env.NODE_ENV}`);
-// console.log(`DB_HOST=${process.env.DB_HOST}`);
-
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.tz.setDefault(process.env.TZ || 'America/Sao_Paulo');
@@ -36,9 +33,9 @@ const loadParameters = async (): Promise<void> => {
   )
     return;
 
-  const qParams = await queryFactory.query(
-    `SELECT * FROM "global-parameters" WHERE key LIKE 'TRYDLOADER_%' ORDER BY key ASC`,
-  );
+  const qParams = await queryFactory.query({
+    sql: `SELECT * FROM "global-parameters" WHERE key LIKE 'TRYDLOADER_%' ORDER BY key ASC`,
+  });
 
   if (!qParams || qParams.rowCount === 0)
     throw new Error(`Unable to load TRYDLOADER_ global parameters`); // Check try catch
@@ -93,7 +90,7 @@ const terminate = async (): Promise<void> => {
   const botLogEvent = async (event: string): Promise<void> => {
     try {
       const res = await axios.post(
-        `http://${process.env.HOST_IP || '127.0.0.1'}:${
+        `http://${process.env.VM_HOST_IP || '127.0.0.1'}:${
           process.env.TELEGRAM_API_PORT || '8001'
         }/tracelog`,
         qs.stringify({
@@ -113,9 +110,9 @@ const terminate = async (): Promise<void> => {
   };
 
   queryFactory = new QueryFactory(logger);
-  await queryFactory.query(
-    `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'TRUE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='TRUE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
-  );
+  await queryFactory.query({
+    sql: `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'TRUE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='TRUE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
+  });
 
   try {
     await loadParameters();
@@ -214,9 +211,9 @@ const terminate = async (): Promise<void> => {
         'YYYY-MM-DD HH:mm',
       );
       if (dtSch.isValid() && dtSch.isBefore(dayjs())) {
-        await queryFactory.query(
-          `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'FALSE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='FALSE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
-        );
+        await queryFactory.query({
+          sql: `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'FALSE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='FALSE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
+        });
         process.env.TRYDLOADER_RUN_SERVICE = 'FALSE';
         logger.warn(
           `[TrydLoaderAPP] Service time programmed stop: ${process.env.TRYDLOADER_SHUTDOWN_TIME}`,
@@ -230,10 +227,10 @@ const terminate = async (): Promise<void> => {
   if (dayjs().day() === 0 || dayjs().day() === 6) isTradeDay = false;
   else {
     // check for holidays
-    const qHolidays = await queryFactory.query(
-      `SELECT event from "holiday-calendar" WHERE "country-code"=$1 AND date::DATE=$2::DATE`,
-      ['BR', dayjs().startOf('day')],
-    );
+    const qHolidays = await queryFactory.query({
+      sql: `SELECT event from "holiday-calendar" WHERE "country-code"=$1 AND date::DATE=$2::DATE`,
+      params: ['BR', dayjs().startOf('day')],
+    });
     if (qHolidays.rowCount > 0) {
       try {
         const calendarExceptions: { country: string; exceptions: string[] }[] =
@@ -273,9 +270,9 @@ const terminate = async (): Promise<void> => {
         .startOf('day')
         .format('DD/MM/YYYY')}`,
     );
-    await queryFactory.query(
-      `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'FALSE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='FALSE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
-    );
+    await queryFactory.query({
+      sql: `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'FALSE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='FALSE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
+    });
     await terminate();
     return;
   }

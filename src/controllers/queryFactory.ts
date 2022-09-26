@@ -13,7 +13,7 @@ export default class QueryFactory {
 
   constructor(logger: Logger) {
     this.pool = new Pool({
-      host: process.env.DB_HOST || '',
+      host: process.env.VM_HOST_IP || '',
       port: Number(process.env.DB_PORT || '5432'),
       database: process.env.DB_NAME || '',
       user: process.env.DB_USER || '',
@@ -32,19 +32,24 @@ export default class QueryFactory {
   }
 
   // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
-  public async query(sql: any, params?: any[]): Promise<any> {
+  public async query(query: { sql: any; params?: any[] }): Promise<any> {
     let tries = 0;
     let queryResult: any;
     let error: any;
     const maxTries = Number(process.env.QUERY_RETRIES || '0');
     while (tries++ <= (maxTries < 0 ? 0 : maxTries)) {
       try {
-        queryResult = await this.pool.query({ text: sql, values: params });
+        queryResult = await this.pool.query({
+          text: query.sql,
+          values: query.params,
+        });
         break;
       } catch (err) {
         error = err;
         this.logger.warn(
-          `[QueryFactory] Query() - exception thrown in query - Try: ${tries}/${maxTries} - Error: ${error.message}`,
+          `[QueryFactory] Query() - exception thrown in query: ${JSON.stringify(
+            query,
+          )} - Try: ${tries}/${maxTries} - Error: ${error.message}`,
         );
         await sleep(Number(process.env.QUERY_RETRY_INTERVAL || '0'));
       }

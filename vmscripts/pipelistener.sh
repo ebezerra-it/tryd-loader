@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e # Exit script immediately if a command exits with a non-zero status
+#set -e # Exit script immediately if a command exits with a non-zero status
 
 # Commands:
 # - VMSTATUS
@@ -20,19 +20,19 @@ do
 done
 
 if test -z "$VM_SCRIPTS_HOST_DIR" ; then
-    echo "{ status: \"error\", message: \"[PIPE_LISTENER] ERROR - Missing argument VM_SCRIPTS_HOST_DIR\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[PIPE_LISTENER] ERROR - Missing argument VM_SCRIPTS_HOST_DIR\" }"
     exit 1
 fi
 if test -z "$VM_PIPE2HOST_HOST_DIR" ; then
-    echo "{ status: \"error\", message: \"[PIPE_LISTENER] ERROR - Missing argument VM_PIPE2HOST_HOST_DIR\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[PIPE_LISTENER] ERROR - Missing argument VM_PIPE2HOST_HOST_DIR\" }"
     exit 1
 fi
 if test -z "$VM_PIPE2HOST_FILENAME" ; then
-    echo "{ status: \"error\", message: \"[PIPE_LISTENER] ERROR - Missing argument VM_PIPE2HOST_FILENAME\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[PIPE_LISTENER] ERROR - Missing argument VM_PIPE2HOST_FILENAME\" }"
     exit 1
 fi
 if test -z "$VM_PIPE2HOST_COMMAND_RETURN_FILENAME" ; then
-    echo "{ status: \"error\", message: \"[PIPE_LISTENER] ERROR - Missing argument VM_PIPE2HOST_COMMAND_RETURN_FILENAME\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[PIPE_LISTENER] ERROR - Missing argument VM_PIPE2HOST_COMMAND_RETURN_FILENAME\" }"
     exit 1
 fi
 
@@ -62,29 +62,36 @@ if ! test -f "${VM_SCRIPTS_HOST_DIR%/}/vmwrongcmd.sh"; then echo "[PIPE_LISTENER
 # Remove previous non deleted pipe.out file
 rm -rf $PATH_TO_PIPE_OUT
 
+# set nocasematch option
+shopt -s nocasematch
+
 while true; do 
     # wait for invoker to read pipe.out file
     if test -f $PATH_TO_PIPE_OUT; then sleep 5; continue; fi
 
-    PIPECMD=$(cat $PATH_TO_PIPE) # .trim().uppercase()
-    re="(VMSTATUS|VMSTART|VMSTOP|VMRESTART|VMSCREENSHOT|TERMINATE)(\s.*)?"
-    if ! [[ $PIPECMD =~ $re ]]; then
-        CMD="WRONGCMD";
+    PIPE_CMD=$(< $PATH_TO_PIPE)
+    re='^(VMSTATUS|VMSTART|VMSTOP|VMRESTART|VMSCREENSHOT|TERMINATE)([[:space:]].*)?$'
+
+    if [[ $PIPE_CMD =~ $re ]] ; then
+        CMD=${BASH_REMATCH[1]} #| xargs | tr a-z A-Z)
+        ARGS=${BASH_REMATCH[2]} #| xargs)
+        CMD="${CMD## }"
+        CMD="${CMD%% }"
+        ARGS="${ARGS## }"
+        ARGS="${ARGS%% }"
     else
-        CMD=${BASH_REMATCH[1]}  | xargs | tr a-z A-Z ;
-        ARGS=${BASH_REMATCH[2]} | xargs;
+        CMD="WRONGCMD"
     fi
 
-    case $CMD in
-        VMSTATUS) SCRIPT="vmstatus.sh $ARGS";;
-        VMSTART) SCRIPT="vmstart.sh $ARGS";;
-        VMSTOP) SCRIPT="vmstop.sh $ARGS";;
-        VMRESTART) SCRIPT="vmrestart.sh $ARGS";;
-        VMSCREENSHOT) SCRIPT="vmscreenshot.sh $ARGS";;
-        TERMINATE) break;;
-        *) SCRIPT="vmwrongcmd.sh";;
+    case "$CMD" in
+        VMSTATUS) SCRIPT="vmstatus.sh $ARGS" ;;
+        VMSTART) SCRIPT="vmstart.sh $ARGS" ;;
+        VMSTOP) SCRIPT="vmstop.sh $ARGS" ;;
+        VMRESTART) SCRIPT="vmrestart.sh $ARGS" ;;
+        VMSCREENSHOT) SCRIPT="vmscreenshot.sh $ARGS" ;;
+        TERMINATE) break ;;
+        *) SCRIPT="vmwrongcmd.sh" ;;
     esac
-
-    eval "$(${VM_SCRIPTS_HOST_DIR%/}/$SCRIPT)" > $PATH_TO_PIPE_OUT 2>&-;
-    sleep 5;
+    
+    eval ${VM_SCRIPTS_HOST_DIR%/}/$SCRIPT > $PATH_TO_PIPE_OUT 2>&-
 done

@@ -7,6 +7,7 @@ A tool for loading data from B3 Exchanges using Tryd Pro.
 - OS: Install disk drivers from virtio-win.iso
 - OS: Install winfsp-1.11.22176.msi
 - OS: Update driver for device "Mass Storage" from virtio-win.iso
+- OS: Install agent drivers from virtio-win.iso
 - Language setup: remove EN keyboard
 - Language setup: change regional settings (date, time and number formats)
 - Taskbar: hidde search box
@@ -14,6 +15,8 @@ A tool for loading data from B3 Exchanges using Tryd Pro.
 - WIN: Services: Windows Update -> STOP / Startup type: DISABLED
 - WIN: Services: Windows Modules Installer Worker -> STOP / Startup type: DISABLED
 - WIN: Services: Windows Time -> START / Startup type: Automatic
+- WIN: Regedit: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System Add a new DWORD value: LocalAccountTokenFilterPolicy Set LocalAccountTokenFilterPolicy = 1 and reboot VM
+- WIN: PSTools: Install PSTools on %SystemRoot%\PSTools folder and add folder to System PATH;
 - Install: Autologon
 - Install: Tryd
 - Install: Node 14.3.0

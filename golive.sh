@@ -63,13 +63,13 @@ echo "[-------------- TRYDLOADER BUILD PROCESS STARTED ----------------]"
 # Copy project files to host
 if [[ $BUILD_APP -eq 1 ]] ; then
     echo "[VM_HOST_DEPLOY] Copying TrydLoader project files to host dir: ${VM_TRYDLOADER_HOST_DIR%/}"
-    rsync --update --recursive --delete-excluded --force --mkpath -e "ssh -p $HOST_PORT" ./deploy ./node_modules ./ssl ./prod.env ./package.json ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}
+    rsync --update --recursive --delete-excluded --force --mkpath -e "ssh -p $HOST_PORT" ./deploy ./node_modules ./ssl ./prod.env ./package.json ./package-lock.json ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}
 fi
 
 # Copy VM scritps to host
 if [[ $BUILD_SCRIPTS -eq 1 ]] ; then
     echo "[VM_HOST_DEPLOY] Copying VM scripts files to host dir: ${VM_SCRIPTS_HOST_DIR%/}"
-    rsync --update --recursive --delete-excluded --mkpath -e "ssh -p $HOST_PORT" ./vmscripts/ ebezerra@$HOST:${VM_SCRIPTS_HOST_DIR%/}
+    rsync --update --recursive --delete-excluded --force --mkpath -e "ssh -p $HOST_PORT" ./vmscripts/ ebezerra@$HOST:${VM_SCRIPTS_HOST_DIR%/}
 fi
 
 ssh ebezerra@$HOST -p $HOST_PORT BUILD_SCRIPTS=$BUILD_SCRIPTS BUILD_APP=$BUILD_APP VM_APP_DIR=$VM_APP_DIR VM_SCRIPTS_HOST_DIR=$VM_SCRIPTS_HOST_DIR VM_TRYDLOADER_HOST_DIR=$VM_TRYDLOADER_HOST_DIR VM_PIPE2HOST_HOST_DIR=$VM_PIPE2HOST_HOST_DIR VM_PIPE2HOST_FILENAME=$VM_PIPE2HOST_FILENAME VM_PIPE2HOST_COMMAND_RETURN_FILENAME=$VM_PIPE2HOST_COMMAND_RETURN_FILENAME PIPE_LISTENER_SCRIPT=$PIPE_LISTENER_SCRIPT 'bash -s' <<'ENDSSH'
@@ -81,12 +81,16 @@ if [[ $BUILD_APP -eq 1 ]] ; then
         echo "[VM_HOST_DEPLOY] ERROR - Missing VM_TRYDLOADER_HOST_DIR directory: $VM_TRYDLOADER_HOST_DIR"
         exit 1
     fi
+    # Resolve WinFS filename case issue
+    if ! test -f "${VM_TRYDLOADER_HOST_DIR%/}/node_modules/edge-js/lib/native/win32/x64/14.3.0/VCRUNTIME140.dll" ; then
+        mv "${VM_TRYDLOADER_HOST_DIR%/}/node_modules/edge-js/lib/native/win32/x64/14.3.0/vcruntime140.dll" "${VM_TRYDLOADER_HOST_DIR%/}/node_modules/edge-js/lib/native/win32/x64/14.3.0/VCRUNTIME140.dll"
+    fi
 
     # Create log directory in Tryd project root dir
     LOG_DIR=$(cat ${VM_TRYDLOADER_HOST_DIR%/}/prod.env | grep LOG_FILES_DIRECTORY | tail -1 | sed 's/^LOG_FILES_DIRECTORY=\(.*\)/\1/')
     if ! test -d "${VM_TRYDLOADER_HOST_DIR%/}/$LOG_DIR" ; then
         mkdir "${VM_TRYDLOADER_HOST_DIR%/}/$LOG_DIR"
-        chmod +w "${VM_TRYDLOADER_HOST_DIR%/}/$LOG_DIR"
+        chmod 777 "${VM_TRYDLOADER_HOST_DIR%/}/$LOG_DIR"
     fi
     echo "[VM_HOST_DEPLOY] TrydLoader project files were sucessfully deployed"
 fi
@@ -110,15 +114,17 @@ if [[ $BUILD_SCRIPTS -eq 1 ]] ; then
     fi
 
     # Stop any existing pipelistener running process
-    ps -aux | grep $PIPE_LISTENER_SCRIPT | grep -v grep | awk '{ print $2 }' | xargs pkill -9 -P 2>/dev/null || true
+    ps -aux | grep $PIPE_LISTENER_SCRIPT | grep -v grep | awk '{ print $2 }' | xargs kill -9 2>/dev/null || true
+    ps -aux | grep $VM_PIPE2HOST_FILENAME | grep -v grep | awk '{ print $2 }' | xargs kill -9 2>/dev/null || true
     echo "[VM_HOST_DEPLOY] Pipe listener script successfully stoped"
 
     # Allow execution permition to scripts directory
     chmod +x "$VM_SCRIPTS_HOST_DIR"
 
     # Start pipe listener in backgroud
+    #pipelistener.sh VM_SCRIPTS_HOST_DIR=~/app/myoraculum/vmscripts VM_PIPE2HOST_HOST_DIR=~/app/myoraculum/pipe2host VM_PIPE2HOST_FILENAME=pipe.host VM_PIPE2HOST_COMMAND_RETURN_FILENAME=pipe.out
     CMD_LISTENER="${VM_SCRIPTS_HOST_DIR%/}/$PIPE_LISTENER_SCRIPT VM_SCRIPTS_HOST_DIR=$VM_SCRIPTS_HOST_DIR VM_PIPE2HOST_HOST_DIR=$VM_PIPE2HOST_HOST_DIR VM_PIPE2HOST_FILENAME=$VM_PIPE2HOST_FILENAME VM_PIPE2HOST_COMMAND_RETURN_FILENAME=$VM_PIPE2HOST_COMMAND_RETURN_FILENAME"
-    nohup $CMD_LISTENER </dev/null >/dev/null 2>&1 &
+    nohup $CMD_LISTENER >/dev/null 2>&1 &
     sleep 5
     if [[ $? -gt 0 ]] ; then
         echo "{ status: \"error\", message: \"[VM_HOST_DEPLOY] ERROR - Unable to start $PIPE_LISTENER_SCRIPT due to error: $@\" }"

@@ -9,90 +9,107 @@ do
    KEY_LENGTH=${#KEY}
    VALUE="${ARGUMENT:$KEY_LENGTH+1}"
 
-   export "$KEY"="$VALUE"
+   if [[ $VALUE == *"\$"* ]] ; then
+      VALUE=$(echo "$VALUE" | sed "s/\\$/\\\\\\\\$/g")
+      export "$KEY"="'$VALUE'"
+   else
+      export "$KEY"="$VALUE"
+   fi
 done
 
 # Validate required arguments
 if test -z "$VM_NAME" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument VM_NAME\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument VM_NAME\" }"
+    exit 1
+fi
+if test -z "$VM_HOST_NAME" ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument VM_HOST_NAME\" }"
+    exit 1
+fi
+if test -z "$VM_HOST_IP" ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument VM_HOST_IP\" }"
+    exit 1
+fi
+if test -z "$VM_USER" ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument VM_USER\" }"
+    exit 1
+fi
+if test -z "$VM_PASS" ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument VM_PASS\" }"
     exit 1
 fi
 if test -z "$VM_SNAPSHOT_START" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument VM_SNAPSHOT_START\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument VM_SNAPSHOT_START\" }"
     exit 1
 fi
 if test -z "$VM_FILESYSTEM_XML_PATH" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument VM_FILESYSTEM_XML_PATH\" }"
-    exit 1
-fi
-if test -z "$HOST_IP" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument HOST_IP\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument VM_FILESYSTEM_XML_PATH\" }"
     exit 1
 fi
 if test -z "$DB_PORT" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument DB_PORT\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument DB_PORT\" }"
     exit 1
 fi
 if test -z "$DB_NAME" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument DB_NAME\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument DB_NAME\" }"
     exit 1
 fi
 if test -z "$DB_USER" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument DB_USER\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument DB_USER\" }"
     exit 1
 fi
 if test -z "$DB_PASS" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument DB_PASS\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument DB_PASS\" }"
     exit 1
 fi
 if test -z "$TELEGRAM_API_PORT" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing argument TELEGRAM_API_PORT\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing argument TELEGRAM_API_PORT\" }"
     exit 1
 fi
 
 # Check if VM exists
-if ! virsh list --all | grep -q "$VM_NAME" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing VM $VM_NAME\" }"
+if ! virsh -c qemu:///system list --all | grep -q "$VM_NAME" ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing VM $VM_NAME\" }"
     exit 1
 fi
 
 # Check if VM is running
-if virsh list --state-running | grep -q "$VM_NAME" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - VM $VM_NAME is already running\" }"
+if virsh -c qemu:///system list --state-running | grep -q "$VM_NAME" ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - VM $VM_NAME is already running\" }"
     exit 1
 fi
 
 # Check if start SNAPSHOT exists in VM
-if ! virsh snapshot-list "$VM_NAME" | grep -q "$VM_SNAPSHOT_START" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Missing snapshot $VM_SNAPSHOT_START in VM $VM_NAME\" }"
+if ! virsh -c qemu:///system snapshot-list "$VM_NAME" | grep -q "$VM_SNAPSHOT_START" ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Missing snapshot $VM_SNAPSHOT_START in VM $VM_NAME\" }"
     exit 1
 fi
 
 # Check if FILESYSTEM fs.xml exists
 if ! test -f "$VM_FILESYSTEM_XML_PATH" ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Filesystem fs.xml does not exist: $VM_FILESYSTEM_XML_PATH\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Filesystem fs.xml does not exist: $VM_FILESYSTEM_XML_PATH\" }"
     exit 1
 fi
 
 # Restore startup snapshot
-virsh snapshot-revert "$VM_NAME" "$VM_SNAPSHOT_START" >&- 2>&-
+virsh -c qemu:///system snapshot-revert "$VM_NAME" "$VM_SNAPSHOT_START" >&- 2>&-
 if [[ $? -gt 0 ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Unable to restore snapshot $VM_SNAPSHOT_START in VM $VM_NAME\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Unable to restore snapshot $VM_SNAPSHOT_START in VM $VM_NAME\" }"
     exit 1
 fi
 
 # Attach filesystem
-virsh attach-device "$VM_NAME" $VM_FILESYSTEM_XML_PATH --live >&- 2>&-
+virsh -c qemu:///system attach-device "$VM_NAME" $VM_FILESYSTEM_XML_PATH --live >&- 2>&-
 if [[ $? -gt 0 ]] ; then
-    virsh destroy "$VM_NAME" >&- 2>&- # stop vm
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Unable to attach file system $VM_FILESYSTEM_XML_PATH to VM $VM_NAME\" }"
+    virsh -c qemu:///system destroy "$VM_NAME" >&- 2>&- # stop vm
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Unable to attach file system $VM_FILESYSTEM_XML_PATH to VM $VM_NAME\" }"
     exit 1
 fi
 
 # Send time sync command to VM
 APP_PID=$(virsh -c qemu:///system qemu-agent-command "$VM_NAME" '{"execute": "guest-exec", "arguments": { "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "arg": [ "-ExecutionPolicy", "ByPass", "-Command", "Start-Process PowerShell -verb runas -ArgumentList \"-noexit\", \"-Command\", \"w32tm /resync /force\"" ], "capture-output": true }}' | sed -e 's/{[ ]*"return"[ ]*:[ ]*{[ ]*"pid"[ ]*:[ ]*\([0-9]\+\)[ ]*}[ ]*}/\1/g')
 if [[ $? -gt 0 ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Failed to send sync time command to VM $VM_NAME\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Failed to send sync time command to VM $VM_NAME\" }"
     exit 1
 fi
 
@@ -100,12 +117,12 @@ sleep 5 # wait for sync command to finish
 
 CMD_RETURN_APP_EXITCODE=$(virsh -c qemu:///system qemu-agent-command "$VM_NAME" "{\"execute\": \"guest-exec-status\", \"arguments\": { \"pid\": $APP_PID }}")
 if [[ $? -gt 0 ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Failed to run sync time command in VM $VM_NAME \" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Failed to run sync time command in VM $VM_NAME\" }"
     exit 1
 fi
 
 if ! [[ $CMD_RETURN_APP_EXITCODE =~ .*\"exitcode\"\s*:\s*([0-9]+)\s*.*,\"exited\"\s*:\s*(true|false).* ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Unknown sync time command return in VM $VM_NAME \", error: \"$CMD_RETURN_APP_EXITCODE\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Unknown sync time command return in VM $VM_NAME\", \"error\": \"$CMD_RETURN_APP_EXITCODE\" }"
     exit 1
 fi
 
@@ -113,41 +130,38 @@ APP_EXITCODE=${BASH_REMATCH[1]}
 APP_EXITED=${BASH_REMATCH[2]}
 
 if [[ $APP_EXITCODE -ne 0 || $APP_EXITED != "true" ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Wrong exitcode/exited return for start service script in VM $VM_NAME \", error: \"$CMD_RETURN_APP_EXITCODE\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Wrong exitcode/exited return for start service script in VM $VM_NAME\", \"error\": \"$CMD_RETURN_APP_EXITCODE\" }"
     exit 1
 fi
-
-# ---------------- STOP -----------------
-echo "{ status: \"success\", message: \"[VMSTART] VM Start script was executed successfuly in VM $VM_NAME\" }"
-exit 0;
 
 # Start service in background
-APP_PID=$(virsh -c qemu:///system qemu-agent-command "$VM_NAME" "{\"execute\": \"guest-exec\", \"arguments\": { \"path\": \"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\", \"arg\": [ \"-ExecutionPolicy\", \"ByPass\", \"-Command\", \"cd Z:\\ ; npx cross-env NODE_ENV=PROD HOST_IP=$HOST_IP DB_PORT=$DB_PORT DB_NAME=$DB_NAME DB_USER=$DB_USER DB_PASS=$DB_PASS TELEGRAM_API_PORT=$TELEGRAM_API_PORT node ./deploy/app.js\" ], \"capture-output\": true }}" | sed -e 's/{[ ]*"return"[ ]*:[ ]*{[ ]*"pid"[ ]*:[ ]*\([0-9]\+\)[ ]*}[ ]*}/\1/g')
+set +H
+APP_PID=$(virsh -c qemu:///system qemu-agent-command "$VM_NAME" "{\"execute\": \"guest-exec\", \"arguments\": { \"path\": \"C:\\\\Windows\\\\System32\\\\PsTools\\\\PsExec.exe\", \"arg\": [ \"-accepteula\", \"\\\\\\\\$VM_HOST_NAME\", \"-u\", \"$VM_USER\", \"-p\", \"$VM_PASS\", \"-i\", \"1\", \"powershell.exe\", \"-executionPolicy\", \"bypass\", \"-noexit\", \"-Command\", \"cd Z: ; npx cross-env NODE_ENV=PROD VM_HOST_IP=$VM_HOST_IP DB_PORT=$DB_PORT DB_NAME=$DB_NAME DB_USER=$DB_USER DB_PASS=$DB_PASS TELEGRAM_API_PORT=$TELEGRAM_API_PORT node .\\\\deploy\\\\app.js\" ], \"capture-output\": true }}" | sed -e 's/{[ ]*"return"[ ]*:[ ]*{[ ]*"pid"[ ]*:[ ]*\([0-9]\+\)[ ]*}[ ]*}/\1/g')
 if [[ $? -gt 0 ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Failed to send start service command to VM $VM_NAME\" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Failed to send start service command to VM $VM_NAME\" }"
     exit 1
 fi
 
-sleep 15 # wait for service to start
+sleep 5 # wait for service to start
 
 CMD_RETURN_APP_EXITCODE=$(virsh -c qemu:///system qemu-agent-command "$VM_NAME" "{\"execute\": \"guest-exec-status\", \"arguments\": { \"pid\": $APP_PID }}")
 if [[ $? -gt 0 ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Failed to run service command in VM $VM_NAME \" }"
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Failed to run service command in VM $VM_NAME\" }"
     exit 1
 fi
 
-if ! [[ $CMD_RETURN_APP_EXITCODE =~ .*\"exitcode\"\s*:\s*([0-9]+)\s*.*,\"exited\"\s*:\s*(true|false).* ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Unknown service command return in VM $VM_NAME \", error: \"$CMD_RETURN_APP_EXITCODE\" }"
+if ! [[ $CMD_RETURN_APP_EXITCODE =~ ^(.*\"exitcode\"\s*:\s*([0-9]+)\s*,\s*)?.*\"exited\"\s*:\s*(true|false).*$ ]] ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Unknown service command return in VM $VM_NAME\", \"error\": $CMD_RETURN_APP_EXITCODE }"
     exit 1
 fi
 
-APP_EXITCODE=${BASH_REMATCH[1]}
-APP_EXITED=${BASH_REMATCH[2]}
+APP_EXITCODE=${BASH_REMATCH[2]}
+APP_EXITED=${BASH_REMATCH[3]}
 
-if [[ $APP_EXITCODE -ne 0 || $APP_EXITED == "true" ]] ; then
-    echo "{ status: \"error\", message: \"[VMSTART] ERROR - Wrong exitcode/exited return for start service script in VM $VM_NAME \", error: \"$CMD_RETURN_APP_EXITCODE\" }"
+if [[ ! -z "$APP_EXITCODE" || $APP_EXITED == "true" ]] ; then
+    echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Wrong exitcode/exited return for start service script in VM $VM_NAME\", \"error\": $CMD_RETURN_APP_EXITCODE }"
     exit 1
 fi
 
-echo "{ status: \"success\", message: \"[VMSTART] VM Start script was executed successfuly in VM $VM_NAME\" }"
+echo "{ \"status\": \"success\", \"message\": \"[VMSTART] VM Start script was executed successfuly in VM $VM_NAME\" }"
 exit 0;

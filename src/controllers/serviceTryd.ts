@@ -182,10 +182,10 @@ export default class ServiceTryd {
 
     // Check if BOV asset exists
     for await (const [index, asset] of aBov.entries()) {
-      const qAsset = await this.queryFactory.query(
-        `SELECT asset FROM "b3-assets-expiry" WHERE asset=$1 AND type=$2 LIMIT 1`,
-        [asset, 'SPOT'],
-      );
+      const qAsset = await this.queryFactory.query({
+        sql: `SELECT asset FROM "b3-assets-expiry" WHERE asset=$1 AND type=$2 LIMIT 1`,
+        params: [asset, 'SPOT'],
+      });
 
       if (qAsset.rowCount === 0) {
         this.logger.warn(`[ServiceTryd] BOV asset not recognized: ${asset}`);
@@ -199,33 +199,56 @@ export default class ServiceTryd {
     }
 
     // Restrict assets quantity to Tryd limitation
-    try {
-      const trydDDEIni = fs.readFileSync(
-        `C:\\Tryd6\\plugins\\stDde\\StDde.ini`,
-        'utf-8',
+    const pathTrydDDEIniFile = `C:\\Tryd6\\plugins\\stDde\\StDde.ini`;
+    let brokerRankingMaxSecurities: number;
+    if (!fs.existsSync(pathTrydDDEIniFile)) {
+      this.logger.warn(
+        `[ServiceTryd] Missing StDde.ini file. Using 'TRYDLOADER_BROKER_RANKING_MAX_SECURITIES' global parameter instead: ${Number(
+          process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
+        )}`,
       );
-      const maxAssets = trydDDEIni.match(/BROKER_RANKING_MAX_SECURITIES=(\d+)/);
-      if (maxAssets && !Number.isNaN(maxAssets[1])) {
-        if (Number(maxAssets[1]) <= 0)
+      brokerRankingMaxSecurities = Number(
+        process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
+      );
+    } else {
+      try {
+        const trydDDEIni = fs.readFileSync(pathTrydDDEIniFile, 'utf-8');
+        const maxAssets = trydDDEIni.match(
+          /BROKER_RANKING_MAX_SECURITIES=(\d+)/,
+        );
+        if (
+          maxAssets &&
+          !Number.isNaN(maxAssets[1]) &&
+          Number(maxAssets[1]) > 0
+        ) {
+          brokerRankingMaxSecurities = Number(maxAssets[1]);
+        } else {
           throw new Error(
-            `[ServiceTryd] Wrong StDde.ini parameter BROKER_RANKING_MAX_SECURITIES: ${trydDDEIni}`,
-          );
-        if (assets.length > Number(maxAssets[1])) {
-          assets.splice(Number(maxAssets[1]));
-          this.logger.warn(
-            `[ServiceTryd] Assets limited to parameter BROKER_RANKING_MAX_SECURITIES in StDde.ini file: ${Number(
-              maxAssets[1],
-            )} - Accepted assets: ${assets.map(a => a.code).join(', ')}`,
+            `Wrong StDde.ini parameter BROKER_RANKING_MAX_SECURITIES: ${trydDDEIni}`,
           );
         }
-      } else {
-        this.logger.error(
-          `[ServiceTryd] Missing parameter BROKER_RANKING_MAX_SECURITIES in StDde.ini file: ${trydDDEIni}`,
+      } catch (err) {
+        this.logger.warn(
+          `[ServiceTryd] Unable to open StDde.ini file. Using 'TRYDLOADER_BROKER_RANKING_MAX_SECURITIES' global parameter instead: ${Number(
+            process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
+          )} - Err: ${JSON.stringify(err)}`,
+        );
+        brokerRankingMaxSecurities = Number(
+          process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
         );
       }
-    } catch (err) {
-      this.logger.error(
-        `[ServiceTryd] Unable to open StDde.ini file: ${JSON.stringify(err)}`,
+    }
+    if (brokerRankingMaxSecurities <= 0)
+      throw new Error(
+        `[ServiceTryd] Wrong BROKER_RANKING_MAX_SECURITIES parameter: ${brokerRankingMaxSecurities}`,
+      );
+
+    if (assets.length > brokerRankingMaxSecurities) {
+      assets.splice(brokerRankingMaxSecurities);
+      this.logger.warn(
+        `[ServiceTryd] Assets limited to parameter BROKER_RANKING_MAX_SECURITIES: ${brokerRankingMaxSecurities} - Accepted assets: ${assets
+          .map(a => a.code)
+          .join(', ')}`,
       );
     }
 
@@ -237,10 +260,10 @@ export default class ServiceTryd {
   ): Promise<
     { current: IFutureContract; next: IFutureContract | undefined } | undefined
   > {
-    const qAssets = await this.queryFactory.query(
-      'SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry">=NOW() ORDER BY "date-expiry" ASC LIMIT 2',
-      [`^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`, 'FUTURES'],
-    );
+    const qAssets = await this.queryFactory.query({
+      sql: 'SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry">=NOW() ORDER BY "date-expiry" ASC LIMIT 2',
+      params: [`^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`, 'FUTURES'],
+    });
 
     if (qAssets.rowCount === 0) return undefined;
 
@@ -312,9 +335,9 @@ export default class ServiceTryd {
         });
     });
 
-    const qBrokers = await this.queryFactory.query(
-      'SELECT id, name, "exchange-bov" bov, "exchange-bmf" bmf FROM "b3-brokers" ORDER BY id ASC',
-    );
+    const qBrokers = await this.queryFactory.query({
+      sql: 'SELECT id, name, "exchange-bov" bov, "exchange-bmf" bmf FROM "b3-brokers" ORDER BY id ASC',
+    });
 
     const newBrokers: IBroker[] = [];
     const updatedBrokersBmf: IBroker[] = [];
@@ -322,10 +345,15 @@ export default class ServiceTryd {
     for await (const broker of brokers) {
       const bDB = qBrokers.rows.find((b: any) => b.id === broker.id);
       if (!bDB) {
-        await this.queryFactory.query(
-          'INSERT INTO "b3-brokers" (id, name, "exchange-bov", "exchange-bmf") VALUES ($1, $2, $3, $4)',
-          [broker.id, broker.name, broker.exchange_bov, broker.exchange_bmf],
-        );
+        await this.queryFactory.query({
+          sql: 'INSERT INTO "b3-brokers" (id, name, "exchange-bov", "exchange-bmf") VALUES ($1, $2, $3, $4)',
+          params: [
+            broker.id,
+            broker.name,
+            broker.exchange_bov,
+            broker.exchange_bmf,
+          ],
+        });
         newBrokers.push(broker);
       } else if (
         broker.name.toUpperCase() !== String(bDB.name).toUpperCase() ||
@@ -333,10 +361,10 @@ export default class ServiceTryd {
         broker.exchange_bmf !== bDB.bmf
       ) {
         if (broker.name.toUpperCase() === String(bDB.name).toUpperCase()) {
-          await this.queryFactory.query(
-            'UPDATE "b3-brokers" SET "exchange-bov"=$2, "exchange-bmf"=$3 WHERE id=$1',
-            [broker.id, broker.exchange_bov, broker.exchange_bmf],
-          );
+          await this.queryFactory.query({
+            sql: 'UPDATE "b3-brokers" SET "exchange-bov"=$2, "exchange-bmf"=$3 WHERE id=$1',
+            params: [broker.id, broker.exchange_bov, broker.exchange_bmf],
+          });
           if (
             broker.exchange_bov !== bDB.bov &&
             broker.exchange_bmf !== bDB.bmf

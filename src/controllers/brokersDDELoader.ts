@@ -221,8 +221,8 @@ export default class BrokersDDELoader {
       if ((broker.vwap !== 0 && broker.volume !== 0) || broker.active) {
         if (!broker.active) broker.active = true;
         query = {
-          text: `SELECT datetime, volume, vwap FROM "b3-brokersbalance" WHERE asset=$1 AND "broker-id"=$2 ORDER BY datetime DESC LIMIT 1`,
-          values: [broker.asset, broker.id],
+          sql: `SELECT datetime, volume, vwap FROM "b3-brokersbalance" WHERE asset=$1 AND "broker-id"=$2 ORDER BY datetime DESC LIMIT 1`,
+          params: [broker.asset, broker.id],
         };
 
         const qLast = await this.queryFactory.query(query);
@@ -236,8 +236,8 @@ export default class BrokersDDELoader {
         }
 
         query = {
-          text: `INSERT INTO "b3-brokersbalance" (datetime, asset, "broker-id", volume, vwap) VALUES ($1, $2, $3, $4, $5)`,
-          values: [
+          sql: `INSERT INTO "b3-brokersbalance" (datetime, asset, "broker-id", volume, vwap) VALUES ($1, $2, $3, $4, $5)`,
+          params: [
             now.toDate(),
             broker.asset,
             broker.id,
