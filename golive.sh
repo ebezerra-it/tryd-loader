@@ -63,7 +63,8 @@ echo "[-------------- TRYDLOADER BUILD PROCESS STARTED ----------------]"
 # Copy project files to host
 if [[ $BUILD_APP -eq 1 ]] ; then
     echo "[VM_HOST_DEPLOY] Copying TrydLoader project files to host dir: ${VM_TRYDLOADER_HOST_DIR%/}"
-    rsync --update --recursive --delete-excluded --force --mkpath -e "ssh -p $HOST_PORT" ./deploy ./node_modules ./ssl ./prod.env ./package.json ./package-lock.json ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}
+    rsync --update --recursive --delete-excluded --force --mkpath -e "ssh -p $HOST_PORT" ./deploy ./node_modules ./ssl ./package.json ./package-lock.json ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}
+    scp -P $HOST_PORT ./prod.env ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}/.env
 fi
 
 # Copy VM scritps to host
@@ -81,13 +82,9 @@ if [[ $BUILD_APP -eq 1 ]] ; then
         echo "[VM_HOST_DEPLOY] ERROR - Missing VM_TRYDLOADER_HOST_DIR directory: $VM_TRYDLOADER_HOST_DIR"
         exit 1
     fi
-    # Resolve WinFS filename case issue
-    if ! test -f "${VM_TRYDLOADER_HOST_DIR%/}/node_modules/edge-js/lib/native/win32/x64/14.3.0/VCRUNTIME140.dll" ; then
-        mv "${VM_TRYDLOADER_HOST_DIR%/}/node_modules/edge-js/lib/native/win32/x64/14.3.0/vcruntime140.dll" "${VM_TRYDLOADER_HOST_DIR%/}/node_modules/edge-js/lib/native/win32/x64/14.3.0/VCRUNTIME140.dll"
-    fi
 
     # Create log directory in Tryd project root dir
-    LOG_DIR=$(cat ${VM_TRYDLOADER_HOST_DIR%/}/prod.env | grep LOG_FILES_DIRECTORY | tail -1 | sed 's/^LOG_FILES_DIRECTORY=\(.*\)/\1/')
+    LOG_DIR=$(cat ${VM_TRYDLOADER_HOST_DIR%/}/.env | grep LOG_FILES_DIRECTORY | tail -1 | sed 's/^LOG_FILES_DIRECTORY=\(.*\)/\1/')
     if ! test -d "${VM_TRYDLOADER_HOST_DIR%/}/$LOG_DIR" ; then
         mkdir "${VM_TRYDLOADER_HOST_DIR%/}/$LOG_DIR"
         chmod 777 "${VM_TRYDLOADER_HOST_DIR%/}/$LOG_DIR"

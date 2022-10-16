@@ -1,11 +1,14 @@
 /* eslint-disable camelcase */
 /* eslint-disable no-restricted-syntax */
 import fs from 'fs';
+import { Pool } from 'pg';
 import { Logger } from 'tslog';
 import dayjs, { Dayjs } from 'dayjs';
+import { EventEmitter } from 'events';
 import TrydHandler, { sleep } from './trydHandler';
-import BrokersDDELoader from './brokersDDELoader';
-import QueryFactory from './queryFactory';
+import AssetsBrokersRTDLoader, {
+  IAssetsBrokersBalance,
+} from './assetsBrokersRTDLoader';
 
 interface IBroker {
   id: number;
@@ -31,31 +34,32 @@ interface IFutureContract {
 
 const ASSETS_FUTURES_NOCONTRACT = 'FRP0, FRP1';
 
-export default class ServiceTryd {
+export default class ServiceTryd extends EventEmitter {
   private logger: Logger;
 
   private botLogger: (event: string) => Promise<void>;
 
   private tryd: TrydHandler;
 
-  private assetsBrokersLoader: BrokersDDELoader[];
+  private assetsBrokersRTDLoader: AssetsBrokersRTDLoader | undefined;
 
-  private queryFactory: QueryFactory;
+  private pool: Pool;
 
   constructor(
-    queryFactory: QueryFactory,
+    pool: Pool,
     logger: Logger,
     botLogger: (event: string) => Promise<void>,
   ) {
+    super({ captureRejections: true });
     this.tryd = new TrydHandler();
-    this.assetsBrokersLoader = [];
     this.logger = logger;
     this.botLogger = botLogger;
-    this.queryFactory = queryFactory;
+    this.pool = pool;
   }
 
   public async start(): Promise<void> {
     const assets = await this.getAssets();
+
     if (assets.length === 0)
       throw new Error(
         `[ServiceTryd] Unable to start service with empty asset list`,
@@ -64,16 +68,49 @@ export default class ServiceTryd {
     const brokers = await this.getTrydBrokers();
     if (brokers.length === 0) throw new Error(`Empty brokers is not allowed`);
 
-    assets.forEach(asset => {
-      this.assetsBrokersLoader.push(
-        new BrokersDDELoader(
-          asset.code,
-          this.logger,
-          this.queryFactory,
-          brokers.filter(b => {
-            if (asset.exchange === TExchange.BMF) return b.exchange_bmf;
-            return b.exchange_bov;
-          }),
+    const assetsBrokers: IAssetsBrokersBalance[] = assets.map(a => {
+      const brokersExchange = brokers.filter(
+        b =>
+          b.exchange_bmf === (a.exchange === TExchange.BMF) ||
+          b.exchange_bov === (a.exchange === TExchange.BOV),
+      );
+      if (!brokersExchange)
+        throw new Error(
+          `Could not select any broker for asset exchange: ${JSON.stringify(
+            a,
+          )}`,
+        );
+      return {
+        asset: a.code,
+        brokersBalance: brokersExchange.map(b => {
+          return {
+            id: b.id,
+            active: false,
+            volume: 0,
+            vwap: 0,
+          };
+        }),
+      };
+    });
+    this.assetsBrokersRTDLoader = new AssetsBrokersRTDLoader(
+      this.pool,
+      this.logger,
+      process.env.TRYDLOADER_RTD_SERVER_HOST || '127.0.0.1',
+      Number(process.env.TRYDLOADER_RTD_SERVER_PORT || '12002'),
+      assetsBrokers,
+    );
+    this.assetsBrokersRTDLoader.on('error', err => {
+      try {
+        if (this.assetsBrokersRTDLoader)
+          this.assetsBrokersRTDLoader.stopListening();
+        // eslint-disable-next-line no-empty
+      } catch {}
+      this.emit(
+        'error',
+        new Error(
+          `[ServiceTryd] Loading process failed to start: ${JSON.stringify(
+            err,
+          )}`,
         ),
       );
     });
@@ -93,42 +130,32 @@ export default class ServiceTryd {
     await this.tryd.startDataListening();
 
     try {
-      this.startAssetsDDEListening();
+      this.startAssetsDataListening();
       this.logger.info(
         `[ServiceTryd] Loading process started for environment: ${process.env.NODE_ENV}`,
       );
     } catch (err) {
       throw new Error(
-        `Loading process failed to start: ${JSON.stringify(err)}`,
+        `[ServiceTryd] Loading process failed to start: ${JSON.stringify(err)}`,
       );
     }
   }
 
-  private startAssetsDDEListening(): void {
-    for (const assetBroker of this.assetsBrokersLoader) {
-      assetBroker.startListening();
-    }
+  private startAssetsDataListening(): void {
+    if (this.assetsBrokersRTDLoader)
+      this.assetsBrokersRTDLoader.startListening();
   }
 
   public async stop(): Promise<void> {
-    await this.stopAssetsDDEListening();
-    this.tryd.removeAllListeners();
-    await this.tryd.close();
-    this.logger.info(`[ServiceTryd] Process stoped`);
-  }
+    if (this.assetsBrokersRTDLoader)
+      this.assetsBrokersRTDLoader.stopListening();
 
-  private async stopAssetsDDEListening(): Promise<void> {
-    for await (const assetBroker of this.assetsBrokersLoader) {
-      try {
-        await assetBroker.stopListening();
-      } catch (err) {
-        this.logger.error(
-          `[ServiceTryd] Failed to stop DDE listening asset: ${
-            assetBroker.asset
-          } - error: ${JSON.stringify(err)}`,
-        );
-      }
-    }
+    this.removeAllListeners();
+    this.tryd.removeAllListeners();
+
+    await this.tryd.close();
+
+    this.logger.info(`[ServiceTryd] Process stoped`);
   }
 
   private async getAssets(): Promise<IAsset[]> {
@@ -182,9 +209,9 @@ export default class ServiceTryd {
 
     // Check if BOV asset exists
     for await (const [index, asset] of aBov.entries()) {
-      const qAsset = await this.queryFactory.query({
-        sql: `SELECT asset FROM "b3-assets-expiry" WHERE asset=$1 AND type=$2 LIMIT 1`,
-        params: [asset, 'SPOT'],
+      const qAsset = await this.pool.query({
+        text: `SELECT asset FROM "b3-assets-expiry" WHERE asset=$1 AND type=$2 LIMIT 1`,
+        values: [asset, 'SPOT'],
       });
 
       if (qAsset.rowCount === 0) {
@@ -260,9 +287,9 @@ export default class ServiceTryd {
   ): Promise<
     { current: IFutureContract; next: IFutureContract | undefined } | undefined
   > {
-    const qAssets = await this.queryFactory.query({
-      sql: 'SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry">=NOW() ORDER BY "date-expiry" ASC LIMIT 2',
-      params: [`^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`, 'FUTURES'],
+    const qAssets = await this.pool.query({
+      text: 'SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry">=NOW() ORDER BY "date-expiry" ASC LIMIT 2',
+      values: [`^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`, 'FUTURES'],
     });
 
     if (qAssets.rowCount === 0) return undefined;
@@ -335,8 +362,8 @@ export default class ServiceTryd {
         });
     });
 
-    const qBrokers = await this.queryFactory.query({
-      sql: 'SELECT id, name, "exchange-bov" bov, "exchange-bmf" bmf FROM "b3-brokers" ORDER BY id ASC',
+    const qBrokers = await this.pool.query({
+      text: 'SELECT id, name, "exchange-bov" bov, "exchange-bmf" bmf FROM "b3-brokers" ORDER BY id ASC',
     });
 
     const newBrokers: IBroker[] = [];
@@ -345,9 +372,9 @@ export default class ServiceTryd {
     for await (const broker of brokers) {
       const bDB = qBrokers.rows.find((b: any) => b.id === broker.id);
       if (!bDB) {
-        await this.queryFactory.query({
-          sql: 'INSERT INTO "b3-brokers" (id, name, "exchange-bov", "exchange-bmf") VALUES ($1, $2, $3, $4)',
-          params: [
+        await this.pool.query({
+          text: 'INSERT INTO "b3-brokers" (id, name, "exchange-bov", "exchange-bmf") VALUES ($1, $2, $3, $4)',
+          values: [
             broker.id,
             broker.name,
             broker.exchange_bov,
@@ -361,9 +388,9 @@ export default class ServiceTryd {
         broker.exchange_bmf !== bDB.bmf
       ) {
         if (broker.name.toUpperCase() === String(bDB.name).toUpperCase()) {
-          await this.queryFactory.query({
-            sql: 'UPDATE "b3-brokers" SET "exchange-bov"=$2, "exchange-bmf"=$3 WHERE id=$1',
-            params: [broker.id, broker.exchange_bov, broker.exchange_bmf],
+          await this.pool.query({
+            text: 'UPDATE "b3-brokers" SET "exchange-bov"=$2, "exchange-bmf"=$3 WHERE id=$1',
+            values: [broker.id, broker.exchange_bov, broker.exchange_bmf],
           });
           if (
             broker.exchange_bov !== bDB.bov &&

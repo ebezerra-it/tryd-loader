@@ -12,6 +12,7 @@ A tool for loading data from B3 Exchanges using Tryd Pro.
 - Language setup: change regional settings (date, time and number formats)
 - Taskbar: hidde search box
 - WIN: Policy Editor: Computer Configuration -> Administrative Templates -> Windows Components -> Search -> Do not allow locations on removable drives to be added to libraries -> Enable
+- WIN: Services: Windows Search -> STOP / Startup type: DISABLED
 - WIN: Services: Windows Update -> STOP / Startup type: DISABLED
 - WIN: Services: Windows Modules Installer Worker -> STOP / Startup type: DISABLED
 - WIN: Services: Windows Time -> START / Startup type: Automatic

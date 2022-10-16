@@ -136,7 +136,7 @@ fi
 
 # Start service in background
 set +H
-APP_PID=$(virsh -c qemu:///system qemu-agent-command "$VM_NAME" "{\"execute\": \"guest-exec\", \"arguments\": { \"path\": \"C:\\\\Windows\\\\System32\\\\PsTools\\\\PsExec.exe\", \"arg\": [ \"-accepteula\", \"\\\\\\\\$VM_HOST_NAME\", \"-u\", \"$VM_USER\", \"-p\", \"$VM_PASS\", \"-i\", \"1\", \"powershell.exe\", \"-executionPolicy\", \"bypass\", \"-noexit\", \"-Command\", \"cd Z: ; npx cross-env NODE_ENV=PROD VM_HOST_IP=$VM_HOST_IP DB_PORT=$DB_PORT DB_NAME=$DB_NAME DB_USER=$DB_USER DB_PASS=$DB_PASS TELEGRAM_API_PORT=$TELEGRAM_API_PORT node .\\\\deploy\\\\app.js\" ], \"capture-output\": true }}" | sed -e 's/{[ ]*"return"[ ]*:[ ]*{[ ]*"pid"[ ]*:[ ]*\([0-9]\+\)[ ]*}[ ]*}/\1/g')
+APP_PID=$(virsh -c qemu:///system qemu-agent-command "$VM_NAME" "{\"execute\": \"guest-exec\", \"arguments\": { \"path\": \"C:\\\\Windows\\\\System32\\\\PsTools\\\\PsExec.exe\", \"arg\": [ \"-accepteula\", \"\\\\\\\\$VM_HOST_NAME\", \"-u\", \"$VM_USER\", \"-p\", \"$VM_PASS\", \"-i\", \"1\", \"powershell.exe\", \"-executionPolicy\", \"bypass\", \"-noexit\", \"-Command\", \"cd Z: ; npx cross-env NODE_ENV=PROD VM_HOST_IP=$VM_HOST_IP DB_PORT=$DB_PORT DB_NAME=$DB_NAME DB_USER=$DB_USER DB_PASS=$DB_PASS TELEGRAM_API_PORT=$TELEGRAM_API_PORT node --no-warnings .\\\\deploy\\\\app.js\" ], \"capture-output\": true }}" | sed -e 's/{[ ]*"return"[ ]*:[ ]*{[ ]*"pid"[ ]*:[ ]*\([0-9]\+\)[ ]*}[ ]*}/\1/g')
 if [[ $? -gt 0 ]] ; then
     echo "{ \"status\": \"error\", \"message\": \"[VMSTART] ERROR - Failed to send start service command to VM $VM_NAME\" }"
     exit 1
