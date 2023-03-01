@@ -249,6 +249,12 @@ export default class TrydHandler extends EventEmitter {
           clearInterval(waitForOnlineConnection);
           if (timeout) clearTimeout(timeout);
           resolve();
+        } else {
+          await this.closeChildWindows();
+          await this.stopDataFeed();
+          await this.startDataFeed();
+          await this.stopDDE();
+          await this.startDDE();
         }
       }, CONNECTION_CHECKER_INTERVAL * 1000);
 
@@ -276,8 +282,19 @@ export default class TrydHandler extends EventEmitter {
       this.robot.mouseClick();
 
       await sleep(ACTION_DELAY);
-      if (!this.dataFeedStarted)
+      if (!this.dataFeedStarted())
         throw new Error('[TrydHandler] Unable to start Data Feed');
+    }
+  }
+
+  private async stopDataFeed(): Promise<void> {
+    if (this.dataFeedStarted()) {
+      this.robot.moveMouse(75, 60);
+      this.robot.mouseClick();
+
+      await sleep(ACTION_DELAY);
+      if (this.dataFeedStarted())
+        throw new Error('[TrydHandler] Unable to stop Data Feed');
     }
   }
 
@@ -295,8 +312,19 @@ export default class TrydHandler extends EventEmitter {
       robot.mouseClick();
 
       await sleep(ACTION_DELAY);
-      if (!this.DDEStarted)
+      if (!this.DDEStarted())
         throw new Error('[TrydHandler] Unable to start DDE');
+    }
+  }
+
+  private async stopDDE(): Promise<void> {
+    if (this.DDEStarted()) {
+      robot.moveMouse(105, 60);
+      robot.mouseClick();
+
+      await sleep(ACTION_DELAY);
+      if (this.DDEStarted())
+        throw new Error('[TrydHandler] Unable to stop DDE');
     }
   }
 

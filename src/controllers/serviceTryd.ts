@@ -1,3 +1,4 @@
+/* eslint-disable no-continue */
 /* eslint-disable camelcase */
 /* eslint-disable no-restricted-syntax */
 import fs from 'fs';
@@ -6,6 +7,9 @@ import { Logger } from 'tslog';
 import dayjs, { Dayjs } from 'dayjs';
 import { EventEmitter } from 'events';
 import TrydHandler, { sleep } from './trydHandler';
+import { IAsset } from './dataRTDLoader';
+import AssetsQuotesRTDLoader from './assetsQuotesRTDLoader';
+import AssetsBooksRTDLoader from './assetsBooksRTDLoader';
 import AssetsBrokersRTDLoader, {
   IAssetsBrokersBalance,
 } from './assetsBrokersRTDLoader';
@@ -22,8 +26,8 @@ enum TExchange {
   BOV = 'BOV',
 }
 
-interface IAsset {
-  code: string;
+interface IAssetExchange {
+  asset: IAsset;
   exchange: TExchange;
 }
 
@@ -35,38 +39,62 @@ interface IFutureContract {
 const ASSETS_FUTURES_NOCONTRACT = 'FRP0, FRP1';
 
 export default class ServiceTryd extends EventEmitter {
-  private logger: Logger;
+  private dateRef: Date;
 
-  private botLogger: (event: string) => Promise<void>;
+  private logger: Logger;
 
   private tryd: TrydHandler;
 
   private assetsBrokersRTDLoader: AssetsBrokersRTDLoader | undefined;
 
+  private assetsBooksRTDLoader: AssetsBooksRTDLoader | undefined;
+
+  private assetsQuotesRTDLoader: AssetsQuotesRTDLoader | undefined;
+
   private pool: Pool;
 
-  constructor(
-    pool: Pool,
-    logger: Logger,
-    botLogger: (event: string) => Promise<void>,
-  ) {
+  constructor(pool: Pool, logger: Logger, dateRef?: Date) {
     super({ captureRejections: true });
     this.tryd = new TrydHandler();
     this.logger = logger;
-    this.botLogger = botLogger;
     this.pool = pool;
+    this.dateRef = dateRef || new Date();
   }
 
   public async start(): Promise<void> {
     const assets = await this.getAssets();
 
-    if (assets.length === 0)
-      throw new Error(
-        `[ServiceTryd] Unable to start service with empty asset list`,
+    if (assets.length === 0) {
+      this.emit(
+        'error',
+        new Error(
+          `[ServiceTryd] Unable to start service with empty asset list`,
+        ),
       );
+      return;
+    }
+
+    this.logger.info(
+      `[ServiceTryd] BMF assets: ${assets
+        .filter(a => a.exchange === TExchange.BMF)
+        .map(a => (a.asset.codeReplay ? a.asset.codeReplay : a.asset.code))
+        .join(', ')}`,
+    );
+    this.logger.info(
+      `[ServiceTryd] BOV assets: ${assets
+        .filter(a => a.exchange === TExchange.BOV)
+        .map(a => (a.asset.codeReplay ? a.asset.codeReplay : a.asset.code))
+        .join(', ')}`,
+    );
 
     const brokers = await this.getTrydBrokers();
-    if (brokers.length === 0) throw new Error(`Empty brokers is not allowed`);
+    if (brokers.length === 0) {
+      this.emit(
+        'error',
+        new Error(`[ServiceTryd] AssetsBrokers - Empty brokers is not allowed`),
+      );
+      return;
+    }
 
     const assetsBrokers: IAssetsBrokersBalance[] = assets.map(a => {
       const brokersExchange = brokers.filter(
@@ -74,14 +102,19 @@ export default class ServiceTryd extends EventEmitter {
           b.exchange_bmf === (a.exchange === TExchange.BMF) ||
           b.exchange_bov === (a.exchange === TExchange.BOV),
       );
-      if (!brokersExchange)
-        throw new Error(
-          `Could not select any broker for asset exchange: ${JSON.stringify(
-            a,
-          )}`,
+      if (!brokersExchange) {
+        this.emit(
+          'error',
+          new Error(
+            `[ServiceTryd] AssetsBrokers - Could not select any broker for asset exchange: ${JSON.stringify(
+              a,
+            )}`,
+          ),
         );
+      }
       return {
-        asset: a.code,
+        asset: { code: a.asset.code, codeReplay: a.asset.codeReplay },
+        datetime: this.dateRef,
         brokersBalance: brokersExchange.map(b => {
           return {
             id: b.id,
@@ -98,20 +131,73 @@ export default class ServiceTryd extends EventEmitter {
       process.env.TRYDLOADER_RTD_SERVER_HOST || '127.0.0.1',
       Number(process.env.TRYDLOADER_RTD_SERVER_PORT || '12002'),
       assetsBrokers,
+      this.dateRef,
     );
-    this.assetsBrokersRTDLoader.on('error', err => {
-      try {
-        if (this.assetsBrokersRTDLoader)
-          this.assetsBrokersRTDLoader.stopListening();
-        // eslint-disable-next-line no-empty
-      } catch {}
-      this.emit(
-        'error',
-        new Error(
-          `[ServiceTryd] Loading process failed to start: ${JSON.stringify(
-            err,
+    this.assetsBrokersRTDLoader.once('error', error => {
+      if (this.listenerCount('error') > 0) this.emit('error', error);
+    });
+
+    this.assetsBooksRTDLoader = new AssetsBooksRTDLoader(
+      this.pool,
+      this.logger,
+      process.env.TRYDLOADER_RTD_SERVER_HOST || '127.0.0.1',
+      Number(process.env.TRYDLOADER_RTD_SERVER_PORT || '12002'),
+      assetsBrokers.map(a => {
+        return {
+          code: a.asset.code,
+          codeReplay: a.asset.codeReplay,
+        };
+      }),
+      this.dateRef,
+    );
+    this.assetsBooksRTDLoader.once('error', error => {
+      if (this.listenerCount('error') > 0) this.emit('error', error);
+    });
+
+    this.assetsQuotesRTDLoader = new AssetsQuotesRTDLoader(
+      this.pool,
+      this.logger,
+      process.env.TRYDLOADER_RTD_SERVER_HOST || '127.0.0.1',
+      Number(process.env.TRYDLOADER_RTD_SERVER_PORT || '12002'),
+      assetsBrokers.map(a => {
+        return {
+          code: a.asset.code,
+          codeReplay: a.asset.codeReplay,
+        };
+      }),
+      this.dateRef,
+    );
+    this.assetsQuotesRTDLoader.once('error', error => {
+      if (this.listenerCount('error') > 0) this.emit('error', error);
+    });
+    this.assetsQuotesRTDLoader.once(
+      'quotedifftime',
+      async (difftime: number) => {
+        this.logger.info(
+          `[ServiceTryd] AssetsQuotes - Auction records updated: ${await this.assetsQuotesRTDLoader!.updateDatetimeDiff(
+            difftime,
           )}`,
-        ),
+        );
+        this.logger.info(
+          `[ServiceTryd] AssetsBrokers - Auction records updated: ${await this.assetsBrokersRTDLoader!.updateDatetimeDiff(
+            difftime,
+          )}`,
+        );
+        this.logger.info(
+          `[ServiceTryd] AssetsBooks - Auction records updated: ${await this.assetsBooksRTDLoader!.updateDatetimeDiff(
+            difftime,
+          )}`,
+        );
+      },
+    );
+    this.assetsQuotesRTDLoader.once('shutdowntime', (datetime: Date) => {
+      process.env.TRYDLOADER_RUN_SERVICE = 'FALSE';
+      this.logger.warn(
+        `[ServiceTryd] Service programmed stop time: ${
+          process.env.TRYDLOADER_SHUTDOWN_TIME
+        } reached: ${datetime.toLocaleDateString(
+          'pt-br',
+        )} ${datetime.toLocaleTimeString('pt-br')}`,
       );
     });
 
@@ -130,36 +216,75 @@ export default class ServiceTryd extends EventEmitter {
     await this.tryd.startDataListening();
 
     try {
+      await this.cleanAuctionData();
       this.startAssetsDataListening();
       this.logger.info(
-        `[ServiceTryd] Loading process started for environment: ${process.env.NODE_ENV}`,
+        `[ServiceTryd] Service started for environment: ${
+          process.env.NODE_ENV
+        } - DateRef: ${this.dateRef.toLocaleDateString()}`,
       );
     } catch (err) {
-      throw new Error(
-        `[ServiceTryd] Loading process failed to start: ${JSON.stringify(err)}`,
+      this.emit(
+        'error',
+        new Error(
+          `[ServiceTryd] Service failed to start: ${JSON.stringify(err)}`,
+        ),
       );
     }
   }
 
-  private startAssetsDataListening(): void {
+  private async startAssetsDataListening(): Promise<void> {
+    if (this.assetsQuotesRTDLoader) this.assetsQuotesRTDLoader.startListening();
+    if (this.assetsBooksRTDLoader) this.assetsBooksRTDLoader.startListening();
     if (this.assetsBrokersRTDLoader)
       this.assetsBrokersRTDLoader.startListening();
   }
 
   public async stop(): Promise<void> {
+    if (this.assetsQuotesRTDLoader) this.assetsQuotesRTDLoader.stopListening();
+    if (this.assetsBooksRTDLoader) this.assetsBooksRTDLoader.stopListening();
     if (this.assetsBrokersRTDLoader)
       this.assetsBrokersRTDLoader.stopListening();
+
+    await this.cleanAuctionData();
 
     this.removeAllListeners();
     this.tryd.removeAllListeners();
 
     await this.tryd.close();
 
-    this.logger.info(`[ServiceTryd] Process stoped`);
+    this.logger.info(`[ServiceTryd] Service stopped`);
   }
 
-  private async getAssets(): Promise<IAsset[]> {
-    const assets: IAsset[] = [];
+  public async cleanAuctionData(): Promise<void> {
+    let delAuctionData = 0;
+    if (this.assetsQuotesRTDLoader) {
+      delAuctionData = await this.assetsQuotesRTDLoader.cleanAuctionData();
+      if (delAuctionData > 0)
+        this.logger.info(
+          `[ServiceTryd] AssetsQuotes - Auction records deleted: ${delAuctionData}`,
+        );
+    }
+
+    if (this.assetsBooksRTDLoader) {
+      delAuctionData = await this.assetsBooksRTDLoader.cleanAuctionData();
+      if (delAuctionData > 0)
+        this.logger.info(
+          `[ServiceTryd] AssetsQuotes - Auction records deleted: ${delAuctionData}`,
+        );
+    }
+
+    if (this.assetsBrokersRTDLoader) {
+      delAuctionData = await this.assetsBrokersRTDLoader.cleanAuctionData();
+      if (delAuctionData > 0)
+        this.logger.info(
+          `[ServiceTryd] AssetsQuotes - Auction records deleted: ${delAuctionData}`,
+        );
+    }
+  }
+
+  private async getAssets(): Promise<IAssetExchange[]> {
+    const assets: IAssetExchange[] = [];
 
     const aBmf = (process.env.TRYDLOADER_ASSETS_BMF || '')
       .split(',')
@@ -185,22 +310,104 @@ export default class ServiceTryd extends EventEmitter {
         )
       )
         assets.push({
-          code: asset,
+          asset: { code: asset },
           exchange: TExchange.BMF,
         });
       else {
-        const contracts = await this.getFuturesContract(
-          asset.replace(/\$[1|2]/, ''),
-        );
+        let assetCode = asset.replace(/\$(1|2|3|A[1-3])/g, '');
 
-        if (!contracts || (asset.indexOf('$2') && !contracts.next)) {
-          this.logger.warn(`[ServiceTryd] BMF asset not recognized: ${asset}`);
+        if (
+          asset.indexOf('$1') >= 0 &&
+          (asset.indexOf('$2') >= 0 || asset.indexOf('$3') >= 0)
+        ) {
+          const qRoll = await this.pool.query({
+            text: `SELECT asset, "underlying-asset" underasset FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "product-group"=$3 and "date-expiry"::DATE>$4::DATE ORDER BY "date-expiry" ASC, asset ASC LIMIT 2`,
+            values: [
+              `^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`,
+              'FUTURES',
+              'ROLLOVER',
+              this.dateRef,
+            ],
+          });
+          if (qRoll.rowCount === 0) {
+            this.logger.warn(
+              `[ServiceTryd] BMF asset not recognized: ${asset}`,
+            );
+            aBmf.splice(index, 1);
+            continue;
+          }
+          assetCode = String(qRoll.rows[0].underasset).trim().toUpperCase();
+        }
+
+        const contracts = await this.getFuturesContract(assetCode);
+
+        if (
+          !contracts ||
+          (asset.indexOf('$2') >= 0 && !contracts.next1) ||
+          (asset.indexOf('$3') >= 0 && !contracts.next2)
+        ) {
+          this.logger.warn(
+            `[ServiceTryd] BMF asset not recognized: ${asset} - Contracts: ${JSON.stringify(
+              contracts,
+            )}`,
+          );
           aBmf.splice(index, 1);
+          continue;
         } else {
+          const codeReplay =
+            contracts.today &&
+            contracts.today.code !== contracts.current.code &&
+            asset.indexOf('$2') < 0 &&
+            asset.indexOf('$3') < 0 &&
+            asset.indexOf('$A1') < 0 &&
+            asset.indexOf('$A2') < 0 &&
+            asset.indexOf('$A3') < 0
+              ? contracts.today.code
+              : undefined;
+
+          if (
+            asset.indexOf('$2') >= 0 &&
+            codeReplay &&
+            asset.replace('$2', contracts.next1 ? contracts.next1.code : '') ===
+              asset.replace('$2', codeReplay)
+          ) {
+            this.logger.warn(
+              `[ServiceTryd] BMF asset ignored due to loading replay: ${asset} => ${asset.replace(
+                '$2',
+                contracts.next1 ? contracts.next1.code : '',
+              )}`,
+            );
+            continue;
+          }
+
+          if (
+            asset.indexOf('$3') >= 0 &&
+            codeReplay &&
+            asset.replace('$3', contracts.next2 ? contracts.next2.code : '') ===
+              asset.replace('$3', codeReplay)
+          ) {
+            this.logger.warn(
+              `[ServiceTryd] BMF asset ignored due to loading replay: ${asset} => ${asset.replace(
+                '$2',
+                contracts.next2 ? contracts.next2.code : '',
+              )}`,
+            );
+            continue;
+          }
+
           assets.push({
-            code: asset
-              .replace('$1', contracts.current.code)
-              .replace('$2', contracts.next ? contracts.next.code : ''),
+            asset: {
+              code: asset
+                .replace('$1', contracts.current.code)
+                .replace('$2', contracts.next1 ? contracts.next1.code : '')
+                .replace('$3', contracts.next2 ? contracts.next2.code : '')
+                .replace('$A1', contracts.a1 ? contracts.a1.code : '')
+                .replace('$A2', contracts.a2 ? contracts.a2.code : '')
+                .replace('$A3', contracts.a3 ? contracts.a3.code : ''),
+              codeReplay: codeReplay
+                ? asset.replace('$1', codeReplay)
+                : undefined,
+            },
             exchange: TExchange.BMF,
           });
         }
@@ -219,62 +426,31 @@ export default class ServiceTryd extends EventEmitter {
         aBov.splice(index, 1);
       } else {
         assets.push({
-          code: asset,
+          asset: { code: asset },
           exchange: TExchange.BOV,
         });
       }
     }
 
-    // Restrict assets quantity to Tryd limitation
-    const pathTrydDDEIniFile = `C:\\Tryd6\\plugins\\stDde\\StDde.ini`;
-    let brokerRankingMaxSecurities: number;
-    if (!fs.existsSync(pathTrydDDEIniFile)) {
-      this.logger.warn(
-        `[ServiceTryd] Missing StDde.ini file. Using 'TRYDLOADER_BROKER_RANKING_MAX_SECURITIES' global parameter instead: ${Number(
-          process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
-        )}`,
+    const brokerRankingMaxSecurities = Number(
+      process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '20',
+    );
+
+    if (brokerRankingMaxSecurities <= 0) {
+      this.emit(
+        'error',
+        new Error(
+          `[ServiceTryd] Wrong BROKER_RANKING_MAX_SECURITIES parameter: ${brokerRankingMaxSecurities}`,
+        ),
       );
-      brokerRankingMaxSecurities = Number(
-        process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
-      );
-    } else {
-      try {
-        const trydDDEIni = fs.readFileSync(pathTrydDDEIniFile, 'utf-8');
-        const maxAssets = trydDDEIni.match(
-          /BROKER_RANKING_MAX_SECURITIES=(\d+)/,
-        );
-        if (
-          maxAssets &&
-          !Number.isNaN(maxAssets[1]) &&
-          Number(maxAssets[1]) > 0
-        ) {
-          brokerRankingMaxSecurities = Number(maxAssets[1]);
-        } else {
-          throw new Error(
-            `Wrong StDde.ini parameter BROKER_RANKING_MAX_SECURITIES: ${trydDDEIni}`,
-          );
-        }
-      } catch (err) {
-        this.logger.warn(
-          `[ServiceTryd] Unable to open StDde.ini file. Using 'TRYDLOADER_BROKER_RANKING_MAX_SECURITIES' global parameter instead: ${Number(
-            process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
-          )} - Err: ${JSON.stringify(err)}`,
-        );
-        brokerRankingMaxSecurities = Number(
-          process.env.TRYDLOADER_BROKER_RANKING_MAX_SECURITIES || '10',
-        );
-      }
+      return assets;
     }
-    if (brokerRankingMaxSecurities <= 0)
-      throw new Error(
-        `[ServiceTryd] Wrong BROKER_RANKING_MAX_SECURITIES parameter: ${brokerRankingMaxSecurities}`,
-      );
 
     if (assets.length > brokerRankingMaxSecurities) {
       assets.splice(brokerRankingMaxSecurities);
       this.logger.warn(
         `[ServiceTryd] Assets limited to parameter BROKER_RANKING_MAX_SECURITIES: ${brokerRankingMaxSecurities} - Accepted assets: ${assets
-          .map(a => a.code)
+          .map(a => (a.asset.codeReplay ? a.asset.codeReplay : a.asset.code))
           .join(', ')}`,
       );
     }
@@ -282,59 +458,157 @@ export default class ServiceTryd extends EventEmitter {
     return assets;
   }
 
-  private async getFuturesContract(
-    assetCode: string,
-  ): Promise<
-    { current: IFutureContract; next: IFutureContract | undefined } | undefined
+  private async getFuturesContract(assetCode: string): Promise<
+    | {
+        today: IFutureContract;
+        current: IFutureContract;
+        next1: IFutureContract | undefined;
+        next2: IFutureContract | undefined;
+        a1: IFutureContract | undefined;
+        a2: IFutureContract | undefined;
+        a3: IFutureContract | undefined;
+      }
+    | undefined
   > {
-    const qAssets = await this.pool.query({
-      text: 'SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry">=NOW() ORDER BY "date-expiry" ASC LIMIT 2',
+    const qToday = await this.pool.query({
+      text: `SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry"::DATE>NOW()::DATE ORDER BY "date-expiry" ASC LIMIT 1`,
       values: [`^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`, 'FUTURES'],
     });
 
-    if (qAssets.rowCount === 0) return undefined;
+    if (qToday.rowCount === 0) return undefined;
 
-    const next =
-      qAssets.rowCount === 2
+    const qContracts = await this.pool.query({
+      text: `SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry"::DATE>$3::DATE ORDER BY "date-expiry" ASC LIMIT 3`,
+      values: [
+        `^${assetCode}(F|G|H|J|K|M|N|Q|U|V|X|Z)\\d\\d$`,
+        'FUTURES',
+        this.dateRef,
+      ],
+    });
+
+    if (qContracts.rowCount === 0) return undefined;
+
+    const next1 =
+      qContracts.rowCount > 1
         ? {
-            code: `${qAssets.rows[1].contract}`,
-            expiry: dayjs(qAssets.rows[1].expiry),
+            code: `${qContracts.rows[1].contract}`,
+            expiry: dayjs(qContracts.rows[1].expiry),
           }
         : undefined;
 
+    const next2 =
+      qContracts.rowCount > 2
+        ? {
+            code: `${qContracts.rows[2].contract}`,
+            expiry: dayjs(qContracts.rows[2].expiry),
+          }
+        : undefined;
+
+    const qAn = await this.pool.query({
+      text: `SELECT asset, contract, "date-expiry" expiry FROM "b3-assets-expiry" WHERE asset ~ $1 AND type=$2 and "date-expiry"::DATE>NOW()::DATE ORDER BY "date-expiry" ASC LIMIT 3`,
+      values: [`^${assetCode}F\\d\\d$`, 'FUTURES'],
+    });
+
     return {
-      current: {
-        code: `${qAssets.rows[0].contract}`,
-        expiry: dayjs(qAssets.rows[0].expiry),
+      today: {
+        code: `${qToday.rows[0].contract}`,
+        expiry: dayjs(qToday.rows[0].expiry),
       },
-      next,
+      current: {
+        code: `${qContracts.rows[0].contract}`,
+        expiry: dayjs(qContracts.rows[0].expiry),
+      },
+      next1,
+      next2,
+      a1:
+        qAn.rowCount > 0
+          ? {
+              code: `${qAn.rows[0].contract}`,
+              expiry: dayjs(qAn.rows[0].expiry),
+            }
+          : undefined,
+      a2:
+        qAn.rowCount > 1
+          ? {
+              code: `${qAn.rows[1].contract}`,
+              expiry: dayjs(qAn.rows[1].expiry),
+            }
+          : undefined,
+      a3:
+        qAn.rowCount > 2
+          ? {
+              code: `${qAn.rows[2].contract}`,
+              expiry: dayjs(qAn.rows[2].expiry),
+            }
+          : undefined,
     };
   }
 
   private async getTrydBrokers(): Promise<IBroker[]> {
-    let fileBrokers = fs.readFileSync(`C:\\Tryd6\\CorBov.txt`, 'utf-8');
-    const brokersBov: { id: number; name: string }[] = fileBrokers
-      .split(/\r?\n/)
-      .map(line => {
-        const broker = line.split(';');
-        return {
-          id: Number(broker[0]),
-          name: broker[1].split('-')[1].trim(),
-        };
-      });
+    let fileBrokers = '';
 
-    fileBrokers = fs.readFileSync(`C:\\Tryd6\\CorBmf.txt`, 'utf-8');
-    const brokersBmf: { id: number; name: string }[] = fileBrokers
-      .split(/\r?\n/)
-      .map(line => {
-        const broker = line.split(';');
-        return {
-          id: Number(broker[0]),
-          name: broker[1].split('-')[1].trim(),
-        };
-      });
+    try {
+      fileBrokers = fs.readFileSync(`C:\\Tryd6\\CorBov.txt`, 'utf-8');
+    } catch (err) {
+      this.logger.warn(
+        `[ServiceTryd] Could not read BOV brokers from Tryd file. Using database data instead - Error: ${JSON.stringify(
+          err,
+        )}`,
+      );
+    }
+    let brokersBov: { id: number; name: string }[];
+    brokersBov = fileBrokers.split(/\r?\n/).map(line => {
+      const broker = line.split(';');
+      return {
+        id: Number(broker[0]),
+        name: broker[1].split('-')[1].trim(),
+      };
+    });
+
+    fileBrokers = '';
+    try {
+      fileBrokers = fs.readFileSync(`C:\\Tryd6\\CorBmf.txt`, 'utf-8');
+    } catch (err) {
+      this.logger.warn(
+        `[ServiceTryd] Could not read BMF brokers from Tryd file. Using database data instead - Error: ${JSON.stringify(
+          err,
+        )}`,
+      );
+    }
+    let brokersBmf: { id: number; name: string }[];
+    brokersBmf = fileBrokers.split(/\r?\n/).map(line => {
+      const broker = line.split(';');
+      return {
+        id: Number(broker[0]),
+        name: broker[1].split('-')[1].trim(),
+      };
+    });
 
     const brokers: IBroker[] = [];
+    const qBrokers = await this.pool.query({
+      text: 'SELECT id, name, "exchange-bov" bov, "exchange-bmf" bmf FROM "b3-brokers" ORDER BY id ASC',
+    });
+    if (!brokersBov || brokersBov.length === 0) {
+      brokersBov = qBrokers.rows
+        .filter(b => b.bov)
+        .map(b => {
+          return {
+            id: Number(b.id),
+            name: b.name,
+          };
+        });
+    }
+    if (!brokersBmf || brokersBmf.length === 0) {
+      brokersBmf = qBrokers.rows
+        .filter(b => b.bov)
+        .map(b => {
+          return {
+            id: Number(b.id),
+            name: b.name,
+          };
+        });
+    }
+
     brokersBov.forEach(bBov => {
       if (brokersBmf.find(bBmf => bBmf.id === bBov.id))
         brokers.push({
@@ -360,10 +634,6 @@ export default class ServiceTryd extends EventEmitter {
           exchange_bov: false,
           exchange_bmf: true,
         });
-    });
-
-    const qBrokers = await this.pool.query({
-      text: 'SELECT id, name, "exchange-bov" bov, "exchange-bmf" bmf FROM "b3-brokers" ORDER BY id ASC',
     });
 
     const newBrokers: IBroker[] = [];

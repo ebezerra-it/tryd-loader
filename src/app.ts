@@ -1,13 +1,13 @@
-import { Logger, ILogObject, TLogLevelName, TLogLevelId } from 'tslog';
-import { Pool } from 'pg';
+import { Pool, QueryResult } from 'pg';
 import path from 'path';
 import fs from 'fs';
-import dayjs from 'dayjs';
+import dayjs, { Dayjs } from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
+import MyLogger from './controllers/myLogger';
 import ServiceTryd, { sleep } from './controllers/serviceTryd';
 
 dotenv.config({ path: path.resolve(__dirname, '../', '.env') });
@@ -25,12 +25,24 @@ const pool = new Pool({
   password: process.env.DB_PASS || '',
   ssl: {
     rejectUnauthorized: false,
-    ca: fs.readFileSync(path.join(__dirname, '../', 'ssl/ca.crt')).toString(),
+    ca: fs
+      .readFileSync(path.join(__dirname, '../', '/cert/db', 'root.crt'))
+      .toString(),
+    key: fs
+      .readFileSync(path.join(__dirname, '../', '/cert/db', 'client.key'))
+      .toString(),
+    cert: fs
+      .readFileSync(path.join(__dirname, '../', '/cert/db', 'client.crt'))
+      .toString(),
   },
 });
 
 let serviceTryd: ServiceTryd;
 let deleted = 0;
+
+const dateRef: Dayjs =
+  process.argv.length > 2 ? dayjs(process.argv[2], 'DD/MM/yyyy') : dayjs();
+
 // C:\Tryd6\trader.exe --launcher.appendVmargs -vmargs -DReplayFilePathToPlayback=C%3A%5CTryd6%5Cworkspace%5Creplay%5Cimport%5CACOES%5Ctryd_replay_20221014.0.gz
 // C:\Tryd6\trader.exe --launcher.appendVmargs -vmargs -DReplayFilePathToPlayback=C:\Tryd6\workspace\replay\import\ACOES\tryd_replay_20221014.0.gz
 const loadParameters = async (): Promise<void> => {
@@ -42,7 +54,11 @@ const loadParameters = async (): Promise<void> => {
     return;
 
   const qParams = await pool.query({
-    text: `SELECT * FROM "global-parameters" WHERE key LIKE 'TRYDLOADER_%' ORDER BY key ASC`,
+    text: `SELECT * FROM "global-parameters" WHERE (key = ANY($1) OR key LIKE 'TRYDLOADER_%') AND NOT key = ANY($2) ORDER BY key ASC`,
+    values: [
+      ['CALENDAR_HOLIDAY_EXCEPTIONS', 'BOT_TRACELOG_MIN_LOG_LEVEL'], // includes
+      ['TRYDLOADER_RUN_SERVICE'], // excludes
+    ],
   });
 
   if (!qParams || qParams.rowCount === 0)
@@ -59,8 +75,11 @@ const terminate = async (): Promise<void> => {
   if (updateParameters) clearInterval(updateParameters);
 
   const qRes = await pool.query({
-    text: `SELECT COUNT(*) inserted FROM "b3-brokers" WHERE datetime=$1::DATE`,
-    values: [new Date()],
+    text: `SELECT q1.inserted+q2.inserted+q3.inserted inserted FROM
+    (SELECT COUNT(*) inserted FROM "b3-assetsbrokers" WHERE datetime::DATE=$1::DATE) q1,
+    (SELECT COUNT(*) inserted FROM "b3-assetsquotes" WHERE datetime::DATE=$1::DATE) q2,
+    (SELECT COUNT(*) inserted FROM "b3-assetsbooks" WHERE datetime::DATE=$1::DATE) q3`,
+    values: [dateRef.toDate()],
   });
 
   const result: { inserted: number; deleted: number } = {
@@ -68,9 +87,9 @@ const terminate = async (): Promise<void> => {
     deleted,
   };
   await pool.query({
-    text: `UPDATE "loadcontrol" SET status=$3, result=$4, "finished-at"=NOW() 
+    text: `UPDATE "loadcontrol" SET status=$3, result=$4, "finished-at"=$5 
     WHERE "date-ref"::DATE=$1::DATE AND process=$2`,
-    values: [new Date(), 'TrydLoaderStarter', 'DONE', result],
+    values: [dateRef.toDate(), 'TrydLoaderStarter', 'DONE', result, new Date()],
   });
 
   if (serviceTryd) await serviceTryd.stop();
@@ -79,63 +98,22 @@ const terminate = async (): Promise<void> => {
 };
 
 (async () => {
-  const logger = new Logger({
-    dateTimeTimezone: process.env.TZ || 'America/Sao_Paulo',
-    dateTimePattern: 'day-month-year hour:minute:second.millisecond',
-  });
+  const logger = new MyLogger();
 
-  const log2File = (logObject: ILogObject | string): void => {
-    const filename = path.resolve(
-      `${__dirname}/../${process.env.LOG_FILES_DIRECTORY || 'log'}/${
-        process.env.LOG_FILES_PREFIX || ''
-      }${dayjs().format('YYYYMM')}.log`,
+  if (!dateRef.isValid()) {
+    logger.error(
+      `[TrydLoaderAPP] ERROR - Invalid reference date: ${process.argv[2]}`,
     );
+    terminate();
+    return;
+  }
 
-    try {
-      fs.appendFileSync(filename, `${JSON.stringify(logObject)}\n`);
-      return;
-    } catch (err) {
-      const errMsg = `[TrydLoaderAPP] SERVICE STOPED! LOGEVENT ERROR - Could not write to log file ${filename} due to error: ${JSON.stringify(
-        err,
-      )}\n[LogMessage]:\n ${JSON.stringify(logObject, null, 4)}\n`;
-      // eslint-disable-next-line no-console
-      console.error(errMsg);
-      process.stdin.emit('SIGTERM', errMsg);
-    }
-  };
-
-  const botLogEvent = async (event: string): Promise<void> => {
-    try {
-      const url = `http://${process.env.VM_HOST_IP || '127.0.0.1'}:${
-        process.env.TELEGRAM_API_PORT || '8001'
-      }/tracelog`;
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          m: event,
-        }),
-      });
-
-      if (!res.ok || res.status !== 200) {
-        log2File(
-          `[TrydLoaderAPP] Can't log event due to BOT-API return status code: ${res.status} - ${res.statusText}`,
-        );
-      }
-    } catch (err) {
-      log2File(
-        `[TrydLoaderAPP] Can't log event due to error: ${JSON.stringify(err)}`,
-      );
-    }
-  };
-
+  // Enable RUN_SERVICE control flag
   await pool.query({
-    text: `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'TRUE', -1, NOW()) ON CONFLICT (key) DO UPDATE SET value='TRUE', "lastupdate-user"=-1, "lastupdate-ts"=NOW()`,
+    text: `INSERT INTO "global-parameters" (key, value, "lastupdate-user", "lastupdate-ts") VALUES ('TRYDLOADER_RUN_SERVICE', 'TRUE', -1, $1) ON CONFLICT (key) DO UPDATE SET value='TRUE', "lastupdate-user"=-1, "lastupdate-ts"=$1`,
+    values: [new Date()],
   });
+  process.env.TRYDLOADER_RUN_SERVICE = 'TRUE';
 
   try {
     await loadParameters();
@@ -146,94 +124,17 @@ const terminate = async (): Promise<void> => {
       4,
     )}`;
 
-    log2File(errMsg);
-    await botLogEvent(errMsg);
+    logger.fatal(errMsg);
 
     await terminate();
     return;
   }
 
-  const logEvent = async (logObject: ILogObject): Promise<void> => {
-    log2File(logObject);
-
-    const tsLogLevels: TLogLevelName[] = [
-      'silly',
-      'trace',
-      'debug',
-      'info',
-      'warn',
-      'error',
-      'fatal',
-    ];
-
-    let idMinLevelBotLog: TLogLevelId;
-
-    if (
-      !tsLogLevels.find(
-        l =>
-          String(l) ===
-          (process.env.TRYDLOADER_BOTLOG_MIN_LOG_LEVEL || 'error'),
-      )
-    ) {
-      idMinLevelBotLog = <TLogLevelId>(
-        tsLogLevels.indexOf(<TLogLevelName>'error')
-      );
-    } else {
-      idMinLevelBotLog = <TLogLevelId>(
-        tsLogLevels.indexOf(
-          <TLogLevelName>(
-            (process.env.TRYDLOADER_BOTLOG_MIN_LOG_LEVEL || 'error')
-          ),
-        )
-      );
-
-      // MIN_LOG_LEVEL = 'info'
-      if (
-        idMinLevelBotLog <
-        <TLogLevelId>tsLogLevels.indexOf(<TLogLevelName>'info')
-      )
-        idMinLevelBotLog = <TLogLevelId>(
-          tsLogLevels.indexOf(<TLogLevelName>'info')
-        );
-    }
-
-    if (logObject.logLevelId >= idMinLevelBotLog)
-      await botLogEvent(
-        JSON.stringify(logObject.argumentsArray.join('\n'), null, 4),
-      );
-  };
-
-  logger.attachTransport(
-    {
-      silly: logEvent,
-      debug: logEvent,
-      trace: logEvent,
-      info: logEvent,
-      warn: logEvent,
-      error: logEvent,
-      fatal: logEvent,
-    },
-    'info',
-  );
-
   // check if service started after shutdown time
-  if (process.env.TRYDLOADER_SHUTDOWN_TIME) {
-    const dtSch = dayjs(
-      `${dayjs().format('YYYY-MM-DD')} ${process.env.TRYDLOADER_SHUTDOWN_TIME}`,
-      'YYYY-MM-DD HH:mm',
-    );
-    if (dtSch.isValid() && dtSch.isBefore(dayjs())) {
-      process.env.TRYDLOADER_RUN_SERVICE = 'FALSE';
-      logger.warn(
-        `[TrydLoaderAPP] Service won't innitiate after programmed stop time: ${process.env.TRYDLOADER_SHUTDOWN_TIME}`,
-      );
-      await terminate();
-      return;
-    }
-  }
-
-  // check if service started after shutdown time
-  if (process.env.TRYDLOADER_SHUTDOWN_TIME) {
+  if (
+    dateRef.startOf('day').isSame(dayjs().startOf('day')) &&
+    String(process.env.TRYDLOADER_SHUTDOWN_TIME) !== ''
+  ) {
     const dtSch = dayjs(
       `${dayjs().format('YYYY-MM-DD')} ${process.env.TRYDLOADER_SHUTDOWN_TIME}`,
       'YYYY-MM-DD HH:mm',
@@ -250,26 +151,28 @@ const terminate = async (): Promise<void> => {
 
   // Check if is trade day
   let isTradeDay = true;
-  if (dayjs().day() === 0 || dayjs().day() === 6) isTradeDay = false;
-  else {
+  let weekendholiday = '';
+  if (dateRef.day() === 0 || dateRef.day() === 6) {
+    weekendholiday = dateRef.format('dddd');
+    isTradeDay = false;
+  } else {
     // check for holidays
     const qHolidays = await pool.query({
       text: `SELECT event from "holiday-calendar" WHERE "country-code"=$1 AND date::DATE=$2::DATE`,
-      values: ['BR', dayjs().startOf('day')],
+      values: ['BR', dateRef.startOf('day')],
     });
     if (qHolidays.rowCount > 0) {
+      isTradeDay = false;
+      weekendholiday = qHolidays.rows[0].event;
       try {
         const calendarExceptions: { country: string; exceptions: string[] }[] =
           JSON.parse(process.env.CALENDAR_HOLIDAY_EXCEPTIONS || '');
 
-        /* console.log(
-          `CALENDAR_EXCEPTIONS=${JSON.stringify(calendarExceptions)}`,
-        ); */
         if (calendarExceptions) {
           const b3Exceptions = calendarExceptions.find(c => c.country === 'BR');
           if (
             b3Exceptions &&
-            !b3Exceptions.exceptions.find(e =>
+            !!b3Exceptions.exceptions.find(e =>
               qHolidays.rows.find(
                 (q: any) =>
                   String(q.event).trim().toUpperCase() ===
@@ -277,7 +180,10 @@ const terminate = async (): Promise<void> => {
               ),
             )
           ) {
-            isTradeDay = false;
+            logger.warn(
+              `[TrydLoaderAPP] Identified holiday exception: ${weekendholiday}`,
+            );
+            isTradeDay = true;
           }
         }
         // eslint-disable-next-line no-empty
@@ -293,9 +199,9 @@ const terminate = async (): Promise<void> => {
   if (!isTradeDay) {
     if (updateParameters) clearInterval(updateParameters);
     logger.warn(
-      `[TrydLoaderAPP] Service weekend/holiday programmed stop: ${dayjs()
-        .startOf('day')
-        .format('DD/MM/YYYY')}`,
+      `[TrydLoaderAPP] Service weekend/holiday programmed stop: ${dateRef.format(
+        'DD/MM/YYYY',
+      )} [${weekendholiday}]`,
     );
 
     await terminate();
@@ -304,30 +210,6 @@ const terminate = async (): Promise<void> => {
 
   updateParameters = setInterval(async () => {
     await loadParameters();
-
-    if (
-      String(process.env.TRYDLOADER_RUN_SERVICE || '')
-        .trim()
-        .toUpperCase() === 'FALSE'
-    )
-      return;
-
-    // check if shutdown time reached
-    if (process.env.TRYDLOADER_SHUTDOWN_TIME) {
-      const dtSch = dayjs(
-        `${dayjs().format('YYYY-MM-DD')} ${
-          process.env.TRYDLOADER_SHUTDOWN_TIME
-        }`,
-        'YYYY-MM-DD HH:mm',
-      );
-      if (dtSch.isValid() && dtSch.isBefore(dayjs())) {
-        if (updateParameters) clearInterval(updateParameters);
-        process.env.TRYDLOADER_RUN_SERVICE = 'FALSE';
-        logger.warn(
-          `[TrydLoaderAPP] Service time programmed stop: ${process.env.TRYDLOADER_SHUTDOWN_TIME}`,
-        );
-      }
-    }
   }, Number(process.env.TRYDLOADER_UPDATE_PARAMETERS_INTERVAL || '30') * 1000);
 
   if (
@@ -335,29 +217,39 @@ const terminate = async (): Promise<void> => {
       .trim()
       .toUpperCase() === 'TRUE'
   ) {
-    serviceTryd = new ServiceTryd(pool, logger, botLogEvent);
-    serviceTryd.on('error', err => {
+    await sleep(10);
+    serviceTryd = new ServiceTryd(pool, logger, dateRef.toDate());
+    serviceTryd.once('error', err => {
       if (updateParameters) clearInterval(updateParameters);
 
       logger.error(
-        `[TrydLoaderAPP] Could not start service due to error: ${JSON.stringify(
-          err,
-          null,
-          4,
-        )}`,
+        `[TrydLoaderAPP] Exception thrown: ${JSON.stringify(err, null, 4)}`,
       );
       process.env.TRYDLOADER_RUN_SERVICE = 'FALSE';
     });
 
-    /* let resDel: QueryResult | null = await pool.query({
-      text: `WITH del as (DELETE FROM "b3-brokersbalance" WHERE datetime=$1::DATE RETURNING *) SELECT COUNT(*) deleted FROM del`,
-      values: [new Date()],
-    });
-    deleted = Number(resDel.rows[0].deleted);
-    resDel = null; */
     deleted = 0;
+    if (!dateRef.startOf('day').isSame(dayjs().startOf('day'))) {
+      let resDel: QueryResult | null;
+      resDel = await pool.query({
+        text: `WITH del as (DELETE FROM "b3-assetsbrokers" WHERE datetime::DATE=$1::DATE OR auction=TRUE RETURNING *) SELECT COUNT(*) deleted FROM del`,
+        values: [dateRef.toDate()],
+      });
+      deleted += Number(resDel.rows[0].deleted);
+      resDel = await pool.query({
+        text: `WITH del as (DELETE FROM "b3-assetsbrokers" WHERE datetime::DATE=$1::DATE OR auction=TRUE RETURNING *) SELECT COUNT(*) deleted FROM del`,
+        values: [dateRef.toDate()],
+      });
+      deleted += Number(resDel.rows[0].deleted);
+      resDel = await pool.query({
+        text: `WITH del as (DELETE FROM "b3-assetsbooks" WHERE datetime::DATE=$1::DATE OR auction=TRUE RETURNING *) SELECT COUNT(*) deleted FROM del`,
+        values: [dateRef.toDate()],
+      });
+      deleted += Number(resDel.rows[0].deleted);
+      resDel = null;
+    }
 
-    await serviceTryd.start();
+    serviceTryd.start();
   }
 
   while (

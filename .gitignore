@@ -6,3 +6,5 @@ vm/
 *.log
 *.ova
 *.crt
+*.pem
+*.key

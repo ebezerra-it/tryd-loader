@@ -56,14 +56,20 @@ if ! test -d "./deploy" && [[ $BUILD_APP -eq 1 ]] ; then
     exit 1
 fi
 
-read -p "[VM_HOST_DEPLOY] Check build in DEPLOY folder is correct and hit <ENTER>"
+read -p "[VM_HOST_DEPLOY] Check whether build in DEPLOY folder is correct and hit <ENTER>"
+printf "\n\n[VM_HOST_DEPLOY] !!! ATTENTION !!!: GOING LIVE \e[5m\e[31mTRYD-LOADER\e[0m - Type <TRYDLOADER> to continue: "
+read CONFIRM
+if [ "$CONFIRM" != "TRYDLOADER" ]; then
+    echo "Script confirmation failed"
+    exit 1;
+fi
 
 echo "[-------------- TRYDLOADER BUILD PROCESS STARTED ----------------]"
-
+echo "[BUILD DATETIME STARTED] $(date '+%Y-%m-%d %H:%M:%S')"
 # Copy project files to host
 if [[ $BUILD_APP -eq 1 ]] ; then
     echo "[VM_HOST_DEPLOY] Copying TrydLoader project files to host dir: ${VM_TRYDLOADER_HOST_DIR%/}"
-    rsync --update --recursive --delete-excluded --force --mkpath -e "ssh -p $HOST_PORT" ./deploy ./node_modules ./ssl ./package.json ./package-lock.json ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}
+    rsync --update --recursive --delete-excluded --force --mkpath -e "ssh -p $HOST_PORT" ./deploy ./node_modules ./cert ./package.json ./package-lock.json ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}
     scp -P $HOST_PORT ./prod.env ebezerra@$HOST:${VM_TRYDLOADER_HOST_DIR%/}/.env
 fi
 
@@ -134,5 +140,5 @@ if [[ $BUILD_SCRIPTS -eq 1 ]] ; then
 fi
 exit 0
 ENDSSH
-
-echo "[-------------- TRYDLOADER BUILD PROCESS FINISHED ----------------]"
+echo "[BUILD DATETIME ENDED] $(date '+%Y-%m-%d %H:%M:%S')"
+echo "[-------------- TRYDLOADER BUILD PROCESS FINISHED ---------------]"

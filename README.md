@@ -11,7 +11,11 @@ A tool for loading data from B3 Exchanges using Tryd Pro.
 - Language setup: remove EN keyboard
 - Language setup: change regional settings (date, time and number formats)
 - Taskbar: hidde search box
+- WIN: Powershell(Adm) - Run command: w32tm /config /syncfromflags:manual /manualpeerlist:"0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org 3.pool.ntp.org" /reliable:yes /update
+- WIN: Powershell(Adm) - To check NTP update: w32tm /query /source
 - WIN: Policy Editor: Computer Configuration -> Administrative Templates -> Windows Components -> Search -> Do not allow locations on removable drives to be added to libraries -> Enable
+- WIN: Policy Editor: Computer Configuration -> Administrative Templates -> Control Panel -> Personalization -> Do not display lock screen -> Enable
+- WIN: Policy Editor: Computer Configuration -> Administrative Templates -> System -> Power Management -> Video and Display Settings -> Turn off the display -> Disable
 - WIN: Services: Windows Search -> STOP / Startup type: DISABLED
 - WIN: Services: Windows Update -> STOP / Startup type: DISABLED
 - WIN: Services: Windows Modules Installer Worker -> STOP / Startup type: DISABLED
