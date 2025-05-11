@@ -34,4 +34,4 @@ A tool for loading data from B3 Exchanges using Tryd Pro.
 - Tinywall: import tinywall_config.tws
 
 ## Authors
-- [@Eduardo Bulhões](https://www.github.com/ebezerra-it)
+- [@Eduardo Bezerra](https://www.github.com/ebezerra-it)
